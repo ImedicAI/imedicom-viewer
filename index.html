@@ -229,6 +229,39 @@ input[type=range]{accent-color:var(--accent);width:100%;}
 .dv-tools-compact #dv-color-underline{height:2px !important;}
 .dv-tools-compact span[style*="font-size:12.5px"]{font-size:10px !important;white-space:nowrap;}
 .dv-tool-grid > *{width:100%;margin:0;min-width:0;}
+
+/* --- Pantallas angostas (iPad, celular): empaquetar iconos en cuadricula   --
+   fija en vez de flex-wrap (que dejaba huecos irregulares), y engrosar los  --
+   iconos de deshacer/rehacer/reset que se veian muy delgados/dificiles de  --
+   distinguir. Solo se activa por debajo de 1024px de ancho, asi que en PC  --
+   con pantalla normal el diseno original no cambia. */
+@media (max-width: 1024px){
+  .dv-tools-compact .dv-tool-grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, minmax(40px, 1fr));
+    align-items:stretch;
+  }
+  .dv-tools-compact .dv-tool-grid > *{width:100%;}
+  .dv-tools-compact .dv-tool-grid .dv-color-picker{grid-column:span 1;}
+  /* Iconos de rotar y espejo: 4 en la misma fila si caben */
+  #dv-rotate-left, #dv-rotate-right{grid-column:span 2;}
+  /* Borrar ocupa mas espacio, el resto (deshacer/rehacer/reset) se acomodan */
+  #dv-clear-annotations{grid-column:span 2;}
+  /* Flecha e invertir color, siempre juntos en la misma fila */
+  #dv-tool-arrow{grid-column:span 3;}
+  #dv-invert{grid-column:span 1;}
+  /* Iconos de deshacer, rehacer y reset de brillo/contraste: mas gruesos y  -
+     grandes para que se distingan bien al tacto */
+  #dv-undo, #dv-redo{
+    font-size:20px !important;
+    font-weight:900 !important;
+    line-height:1;
+  }
+  #dv-wlww-reset{
+    font-size:16px !important;
+    font-weight:900 !important;
+  }
+}
 .dv-tool-grid .dv-color-picker{display:block;width:100%;height:100%;}
 .dv-tool-grid .dv-color-picker > button{width:100%;height:100%;}
 .dv-color-picker{position:relative;display:inline-block;}
