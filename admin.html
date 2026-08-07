@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>imeDICOM · Panel de acceso</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+:root{
+  --bg:#0A0E12;
+  --panel:#12181F;
+  --panel-alt:#1A222B;
+  --border:#232C36;
+  --navy:#2D3B6D;
+  --green:#26855C;
+  --accent:#3FD0C0;
+  --warn:#E8A33D;
+  --danger:#E2645C;
+  --text:#E7EDF2;
+  --text-muted:#7C8A99;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:'IBM Plex Sans', sans-serif;
+  padding:28px 20px 80px;
+}
+.wrap{ max-width:1080px; margin:0 auto; }
+
+/* ---- Encabezado ---- */
+header{ display:flex; align-items:center; gap:14px; margin-bottom:28px; }
+header h1{
+  font-family:'Space Grotesk', sans-serif; font-size:22px; margin:0;
+  display:flex; align-items:baseline; gap:6px;
+}
+header h1 .ime{ color:var(--green); }
+header h1 .dicom{ color:#4C7CF0; }
+header .sub{ color:var(--text-muted); font-size:13px; margin-left:auto; }
+
+/* ---- Candado de admin (secreto) ---- */
+#gate{
+  max-width:380px; margin:80px auto; background:var(--panel);
+  border:1px solid var(--border); border-radius:12px; padding:26px;
+  text-align:center;
+}
+#gate h2{ font-family:'Space Grotesk',sans-serif; font-size:17px; margin:0 0 6px; }
+#gate p{ color:var(--text-muted); font-size:13px; margin:0 0 16px; }
+#gate input{
+  width:100%; box-sizing:border-box; background:var(--panel-alt); border:1.5px solid var(--border);
+  color:var(--text); font-family:'IBM Plex Mono',monospace; font-size:14px; letter-spacing:1px;
+  text-align:center; padding:11px; border-radius:6px; margin-bottom:10px;
+}
+#gate input:focus{ outline:none; border-color:var(--accent); }
+#gate button{
+  width:100%; padding:11px; border:none; border-radius:6px; background:var(--accent);
+  color:#08211C; font-weight:700; font-size:14px; cursor:pointer;
+}
+#gate .err{ color:var(--danger); font-size:12.5px; margin-top:10px; min-height:16px; }
+#app{ display:none; }
+#app.show{ display:block; }
+
+/* ---- Tarjetas / secciones ---- */
+.card{
+  background:var(--panel); border:1px solid var(--border); border-radius:12px;
+  padding:20px 22px; margin-bottom:22px;
+}
+.card h2{
+  font-family:'Space Grotesk', sans-serif; font-size:15px; margin:0 0 16px;
+  color:var(--text); display:flex; align-items:center; gap:8px;
+}
+.card h2 .tag{
+  font-family:'IBM Plex Mono', monospace; font-size:10.5px; font-weight:500;
+  color:var(--text-muted); background:var(--panel-alt); border:1px solid var(--border);
+  border-radius:4px; padding:2px 6px; text-transform:uppercase;
+}
+
+/* ---- Formulario crear código ---- */
+.form-grid{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:14px; }
+.field label{
+  display:block; font-size:11.5px; text-transform:uppercase; letter-spacing:.5px;
+  color:var(--text-muted); margin-bottom:6px; font-weight:600;
+}
+.field input[type=text], .field input[type=date], .field input[type=number], .field select{
+  width:100%; box-sizing:border-box; background:var(--panel-alt); border:1.5px solid var(--border);
+  color:var(--text); font-family:'IBM Plex Sans', sans-serif; font-size:13.5px;
+  padding:9px 10px; border-radius:6px;
+}
+.field input:focus, .field select:focus{ outline:none; border-color:var(--accent); }
+.field.checkbox{ display:flex; align-items:center; gap:8px; margin-top:22px; }
+.field.checkbox input{ width:16px; height:16px; }
+.field.checkbox label{ margin:0; font-size:12.5px; text-transform:none; color:var(--text); font-weight:500; }
+
+.type-toggle{ display:flex; gap:8px; margin-bottom:16px; }
+.type-toggle button{
+  flex:1; padding:10px; border-radius:8px; border:1.5px solid var(--border);
+  background:var(--panel-alt); color:var(--text-muted); font-weight:700; font-size:13px;
+  cursor:pointer; font-family:'IBM Plex Sans', sans-serif;
+}
+.type-toggle button.active[data-type="personal"]{ border-color:var(--accent); color:var(--accent); background:rgba(63,208,192,.08); }
+.type-toggle button.active[data-type="cliente"]{ border-color:var(--green); color:#4EDB9E; background:rgba(38,133,92,.12); }
+
+.actions-row{ display:flex; gap:10px; margin-top:18px; align-items:center; }
+.btn{
+  border:none; border-radius:7px; padding:10px 18px; font-weight:700; font-size:13.5px;
+  cursor:pointer; font-family:'IBM Plex Sans', sans-serif;
+}
+.btn-primary{ background:var(--accent); color:#08211C; }
+.btn-primary:hover{ background:#54e0d0; }
+.btn-secondary{ background:transparent; border:1.5px solid var(--border); color:var(--text); }
+.btn-secondary:hover{ border-color:var(--text-muted); }
+.btn-danger{ background:transparent; border:1.5px solid var(--danger); color:var(--danger); padding:6px 12px; font-size:12px; }
+.btn-danger:hover{ background:rgba(226,100,94,.1); }
+.btn-warn{ background:transparent; border:1.5px solid var(--warn); color:var(--warn); padding:6px 12px; font-size:12px; }
+.btn-warn:hover{ background:rgba(232,163,61,.1); }
+.btn-ghost{ background:transparent; border:1.5px solid var(--border); color:var(--text-muted); padding:6px 12px; font-size:12px; }
+.btn-ghost:hover{ border-color:var(--text-muted); color:var(--text); }
+#form-msg{ font-size:12.5px; min-height:16px; margin-top:10px; font-family:'IBM Plex Mono',monospace; }
+#form-msg.err{ color:var(--danger); }
+#form-msg.ok{ color:var(--accent); }
+
+/* ---- Barra de búsqueda / filtro ---- */
+.toolbar{ display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; align-items:center; }
+.toolbar input[type=text]{
+  flex:1; min-width:200px; background:var(--panel-alt); border:1.5px solid var(--border);
+  color:var(--text); padding:9px 12px; border-radius:6px; font-size:13px;
+}
+.toolbar select{
+  background:var(--panel-alt); border:1.5px solid var(--border); color:var(--text);
+  padding:9px 10px; border-radius:6px; font-size:13px;
+}
+.toolbar .count{ color:var(--text-muted); font-size:12.5px; margin-left:auto; }
+
+/* ---- Tabla de códigos ---- */
+table{ width:100%; border-collapse:collapse; font-size:13px; }
+th{
+  text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.4px;
+  color:var(--text-muted); padding:8px 10px; border-bottom:1px solid var(--border); font-weight:600;
+}
+td{ padding:10px; border-bottom:1px solid var(--border); vertical-align:top; }
+tr:last-child td{ border-bottom:none; }
+.code-cell{ font-family:'IBM Plex Mono', monospace; font-weight:700; letter-spacing:.5px; }
+.badge{
+  display:inline-block; font-size:10.5px; font-weight:700; text-transform:uppercase;
+  padding:2px 7px; border-radius:20px; letter-spacing:.3px;
+}
+.badge.personal{ background:rgba(63,208,192,.12); color:var(--accent); border:1px solid rgba(63,208,192,.35); }
+.badge.cliente{ background:rgba(76,124,240,.12); color:#7FA0F5; border:1px solid rgba(76,124,240,.35); }
+.badge.active{ background:rgba(38,133,92,.15); color:#4EDB9E; border:1px solid rgba(38,133,92,.4); }
+.badge.inactive{ background:rgba(226,100,94,.12); color:var(--danger); border:1px solid rgba(226,100,94,.35); }
+.badge.expired{ background:rgba(232,163,61,.12); color:var(--warn); border:1px solid rgba(232,163,61,.35); }
+.muted{ color:var(--text-muted); }
+.devices-list{ display:flex; flex-direction:column; gap:4px; margin-top:4px; }
+.device-chip{
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  background:var(--panel-alt); border:1px solid var(--border); border-radius:5px;
+  padding:4px 8px; font-size:11.5px; font-family:'IBM Plex Mono', monospace;
+}
+.device-chip button{
+  background:none; border:none; color:var(--danger); cursor:pointer; font-size:11px;
+  font-family:'IBM Plex Sans', sans-serif; font-weight:600; padding:0;
+}
+.row-actions{ display:flex; gap:6px; flex-wrap:wrap; }
+.empty-state{ text-align:center; color:var(--text-muted); padding:30px 0; font-size:13.5px; }
+#list-msg{ font-size:12.5px; color:var(--danger); margin-top:8px; }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <h2>Panel de acceso · imeDICOM</h2>
+  <p>Ingresá la clave de administrador para gestionar los códigos.</p>
+  <input type="password" id="gate-secret" placeholder="CLAVE DE ADMINISTRADOR" autocomplete="off">
+  <button id="gate-btn">Entrar</button>
+  <div class="err" id="gate-err"></div>
+</div>
+
+<div class="wrap" id="app">
+  <header>
+    <h1><span class="ime">ime</span><span class="dicom">DICOM</span> · Panel de acceso</h1>
+    <div class="sub" id="worker-url-label"></div>
+  </header>
+
+  <!-- Crear / editar código -->
+  <div class="card">
+    <h2>Crear código <span class="tag" id="edit-tag" style="display:none;">editando</span></h2>
+
+    <div class="type-toggle">
+      <button type="button" data-type="personal" id="type-personal">Uso personal (sin vencimiento)</button>
+      <button type="button" data-type="cliente" id="type-cliente">Cliente (con límite)</button>
+    </div>
+
+    <div class="form-grid">
+      <div class="field">
+        <label>Código</label>
+        <input type="text" id="f-code" placeholder="Ej. CASAPALCA2026" style="text-transform:uppercase;">
+      </div>
+      <div class="field">
+        <label>Etiqueta / a quién pertenece</label>
+        <input type="text" id="f-label" placeholder="Ej. Dr. Ramos - Clínica X">
+      </div>
+      <div class="field" id="f-expira-wrap">
+        <label>Vence el</label>
+        <input type="date" id="f-expira">
+      </div>
+      <div class="field" id="f-devices-wrap">
+        <label>Máx. dispositivos</label>
+        <input type="number" id="f-devices" min="1" value="1">
+      </div>
+      <div class="field checkbox">
+        <input type="checkbox" id="f-active" checked>
+        <label for="f-active">Código activo</label>
+      </div>
+      <div class="field checkbox" id="f-reset-wrap" style="display:none;">
+        <input type="checkbox" id="f-reset">
+        <label for="f-reset">Liberar todos los dispositivos ya registrados</label>
+      </div>
+    </div>
+
+    <div class="actions-row">
+      <button class="btn btn-primary" id="f-submit">Crear código</button>
+      <button class="btn btn-secondary" id="f-cancel" style="display:none;">Cancelar edición</button>
+    </div>
+    <div id="form-msg"></div>
+  </div>
+
+  <!-- Listado -->
+  <div class="card">
+    <h2>Códigos existentes</h2>
+    <div class="toolbar">
+      <input type="text" id="search" placeholder="Buscar por código o etiqueta…">
+      <select id="filter-type">
+        <option value="">Todos los tipos</option>
+        <option value="personal">Personal</option>
+        <option value="cliente">Cliente</option>
+      </select>
+      <select id="filter-status">
+        <option value="">Todos los estados</option>
+        <option value="active">Activos</option>
+        <option value="inactive">Desactivados</option>
+        <option value="expired">Vencidos</option>
+      </select>
+      <button class="btn btn-ghost" id="refresh-btn">Actualizar</button>
+      <div class="count" id="result-count"></div>
+    </div>
+    <div style="overflow-x:auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Código</th>
+            <th>Tipo</th>
+            <th>Etiqueta</th>
+            <th>Estado</th>
+            <th>Vence</th>
+            <th>Dispositivos</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="table-body"></tbody>
+      </table>
+      <div class="empty-state" id="empty-state" style="display:none;">No hay códigos que coincidan con el filtro.</div>
+    </div>
+    <div id="list-msg"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  // ==================== Configuración ====================
+  // Misma URL que usa el visor imeDICOM para validar códigos.
+  const ACCESS_WORKER_URL = 'https://imedicom-access.imedica.workers.dev';
+  const SECRET_SESSION_KEY = 'dv_admin_secret'; // solo en sessionStorage (se borra al cerrar pestaña)
+
+  document.getElementById('worker-url-label').textContent = ACCESS_WORKER_URL.replace('https://','');
+
+  // ==================== Candado del panel ====================
+  const gate = document.getElementById('gate');
+  const app = document.getElementById('app');
+  const gateSecretInput = document.getElementById('gate-secret');
+  const gateBtn = document.getElementById('gate-btn');
+  const gateErr = document.getElementById('gate-err');
+
+  let ADMIN_SECRET = '';
+
+  function api(path, opts) {
+    opts = opts || {};
+    const headers = Object.assign({ 'Content-Type': 'application/json', 'X-Admin-Secret': ADMIN_SECRET }, opts.headers || {});
+    return fetch(ACCESS_WORKER_URL + path, Object.assign({}, opts, { headers }))
+      .then(async (resp) => {
+        let data;
+        try { data = await resp.json(); } catch(e) { data = {}; }
+        if (!resp.ok) throw { status: resp.status, data };
+        return data;
+      });
+  }
+
+  async function tryEnter() {
+    const secret = gateSecretInput.value.trim();
+    if (!secret) { gateErr.textContent = 'Ingresá la clave.'; return; }
+    gateBtn.disabled = true; gateBtn.textContent = 'Verificando…';
+    ADMIN_SECRET = secret;
+    try {
+      await api('/admin/codes', { method: 'GET' });
+      try { sessionStorage.setItem(SECRET_SESSION_KEY, secret); } catch(e){}
+      gate.style.display = 'none';
+      app.classList.add('show');
+      loadCodes();
+    } catch (err) {
+      ADMIN_SECRET = '';
+      gateErr.textContent = (err && err.status === 401) ? 'Clave incorrecta.' : 'No se pudo conectar con el servidor.';
+    } finally {
+      gateBtn.disabled = false; gateBtn.textContent = 'Entrar';
+    }
+  }
+  gateBtn.addEventListener('click', tryEnter);
+  gateSecretInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryEnter(); });
+
+  // Recordar la clave solo durante la pestaña abierta (no persiste al cerrar el navegador)
+  (function tryAutoLogin(){
+    try {
+      const saved = sessionStorage.getItem(SECRET_SESSION_KEY);
+      if (saved) { gateSecretInput.value = saved; tryEnter(); }
+    } catch(e){}
+  })();
+
+  // ==================== Formulario crear/editar ====================
+  const typePersonalBtn = document.getElementById('type-personal');
+  const typeClienteBtn = document.getElementById('type-cliente');
+  const fCode = document.getElementById('f-code');
+  const fLabel = document.getElementById('f-label');
+  const fExpira = document.getElementById('f-expira');
+  const fExpiraWrap = document.getElementById('f-expira-wrap');
+  const fDevices = document.getElementById('f-devices');
+  const fDevicesWrap = document.getElementById('f-devices-wrap');
+  const fActive = document.getElementById('f-active');
+  const fResetWrap = document.getElementById('f-reset-wrap');
+  const fReset = document.getElementById('f-reset');
+  const fSubmit = document.getElementById('f-submit');
+  const fCancel = document.getElementById('f-cancel');
+  const editTag = document.getElementById('edit-tag');
+  const formMsg = document.getElementById('form-msg');
+
+  let currentType = 'cliente';
+  let editingCode = null; // null = creando uno nuevo
+
+  function setType(type) {
+    currentType = type;
+    typePersonalBtn.classList.toggle('active', type === 'personal');
+    typeClienteBtn.classList.toggle('active', type === 'cliente');
+    if (type === 'personal') {
+      fExpiraWrap.style.opacity = '.45';
+      fDevicesWrap.style.opacity = '.45';
+      fExpira.disabled = true; fDevices.disabled = true;
+    } else {
+      fExpiraWrap.style.opacity = '1';
+      fDevicesWrap.style.opacity = '1';
+      fExpira.disabled = false; fDevices.disabled = false;
+    }
+  }
+  typePersonalBtn.addEventListener('click', () => setType('personal'));
+  typeClienteBtn.addEventListener('click', () => setType('cliente'));
+  setType('cliente');
+
+  function resetForm() {
+    editingCode = null;
+    fCode.value = ''; fCode.disabled = false;
+    fLabel.value = '';
+    fExpira.value = '';
+    fDevices.value = '1';
+    fActive.checked = true;
+    fReset.checked = false;
+    fResetWrap.style.display = 'none';
+    setType('cliente');
+    fSubmit.textContent = 'Crear código';
+    editTag.style.display = 'none';
+    fCancel.style.display = 'none';
+    formMsg.textContent = ''; formMsg.className = '';
+  }
+  fCancel.addEventListener('click', resetForm);
+
+  function fillFormForEdit(item) {
+    editingCode = item.code;
+    fCode.value = item.code; fCode.disabled = true;
+    fLabel.value = item.label || '';
+    fExpira.value = item.expiresAt ? item.expiresAt.slice(0,10) : '';
+    fDevices.value = item.maxDevices || 1;
+    fActive.checked = item.active !== false;
+    fReset.checked = false;
+    fResetWrap.style.display = (item.devices && item.devices.length) ? 'flex' : 'none';
+    setType(item.type === 'personal' ? 'personal' : 'cliente');
+    fSubmit.textContent = 'Guardar cambios';
+    editTag.style.display = 'inline-block';
+    fCancel.style.display = 'inline-block';
+    formMsg.textContent = ''; formMsg.className = '';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  fSubmit.addEventListener('click', async () => {
+    const code = fCode.value.trim().toUpperCase();
+    if (!code) { formMsg.textContent = 'Ingresá un código.'; formMsg.className = 'err'; return; }
+
+    const body = {
+      code,
+      type: currentType,
+      label: fLabel.value.trim() || null,
+      active: fActive.checked,
+      expiresAt: (currentType === 'cliente' && fExpira.value) ? new Date(fExpira.value + 'T23:59:59').toISOString() : null,
+      maxDevices: currentType === 'personal' ? null : (parseInt(fDevices.value, 10) || 1),
+      resetDevices: !!fReset.checked
+    };
+
+    fSubmit.disabled = true;
+    formMsg.textContent = 'Guardando…'; formMsg.className = '';
+    try {
+      await api('/admin/codes', { method: 'POST', body: JSON.stringify(body) });
+      formMsg.textContent = editingCode ? 'Código actualizado.' : 'Código creado.';
+      formMsg.className = 'ok';
+      resetForm();
+      loadCodes();
+    } catch (err) {
+      formMsg.textContent = (err && err.data && err.data.detail) ? err.data.detail : 'No se pudo guardar el código.';
+      formMsg.className = 'err';
+    } finally {
+      fSubmit.disabled = false;
+    }
+  });
+
+  // ==================== Listado ====================
+  const tbody = document.getElementById('table-body');
+  const emptyState = document.getElementById('empty-state');
+  const resultCount = document.getElementById('result-count');
+  const listMsg = document.getElementById('list-msg');
+  const searchInput = document.getElementById('search');
+  const filterType = document.getElementById('filter-type');
+  const filterStatus = document.getElementById('filter-status');
+  const refreshBtn = document.getElementById('refresh-btn');
+
+  let allCodes = [];
+
+  function statusOf(item) {
+    if (item.active === false) return 'inactive';
+    if (item.expiresAt && Date.now() > new Date(item.expiresAt).getTime()) return 'expired';
+    return 'active';
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '<span class="muted">Sin vencimiento</span>';
+    const d = new Date(iso);
+    return d.toLocaleDateString('es-PE', { day:'2-digit', month:'short', year:'numeric' });
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  async function loadCodes() {
+    listMsg.textContent = '';
+    try {
+      const data = await api('/admin/codes', { method: 'GET' });
+      allCodes = data.codes || [];
+      render();
+    } catch (err) {
+      listMsg.textContent = 'No se pudo cargar la lista de códigos.';
+    }
+  }
+  refreshBtn.addEventListener('click', loadCodes);
+  searchInput.addEventListener('input', render);
+  filterType.addEventListener('change', render);
+  filterStatus.addEventListener('change', render);
+
+  function render() {
+    const q = searchInput.value.trim().toUpperCase();
+    const ft = filterType.value;
+    const fs = filterStatus.value;
+
+    const filtered = allCodes.filter((item) => {
+      if (ft && item.type !== ft) return false;
+      if (fs && statusOf(item) !== fs) return false;
+      if (q && !(item.code.toUpperCase().includes(q) || (item.label||'').toUpperCase().includes(q))) return false;
+      return true;
+    });
+
+    resultCount.textContent = filtered.length + ' de ' + allCodes.length + ' código(s)';
+    tbody.innerHTML = '';
+    emptyState.style.display = filtered.length ? 'none' : 'block';
+
+    filtered
+      .sort((a,b) => (b.createdAt||'').localeCompare(a.createdAt||''))
+      .forEach((item) => {
+        const st = statusOf(item);
+        const devices = item.devices || [];
+        const devicesLabel = item.maxDevices
+          ? (devices.length + ' / ' + item.maxDevices)
+          : '<span class="muted">Sin límite</span>';
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="code-cell">${escapeHtml(item.code)}</td>
+          <td><span class="badge ${item.type}">${item.type === 'personal' ? 'Personal' : 'Cliente'}</span></td>
+          <td>${escapeHtml(item.label) || '<span class="muted">—</span>'}</td>
+          <td><span class="badge ${st}">${st === 'active' ? 'Activo' : st === 'inactive' ? 'Desactivado' : 'Vencido'}</span></td>
+          <td>${fmtDate(item.expiresAt)}</td>
+          <td>
+            ${devicesLabel}
+            ${devices.length ? `<div class="devices-list">${devices.map(d => `
+              <div class="device-chip">
+                <span title="${escapeHtml(d.id)}">${escapeHtml(d.label || d.id.slice(0,8))}</span>
+                <button data-remove-device="${escapeHtml(item.code)}" data-device-id="${escapeHtml(d.id)}">quitar</button>
+              </div>`).join('')}</div>` : ''}
+          </td>
+          <td>
+            <div class="row-actions">
+              <button class="btn btn-ghost" data-edit="${escapeHtml(item.code)}">Editar</button>
+              ${item.active !== false
+                ? `<button class="btn btn-warn" data-toggle="${escapeHtml(item.code)}" data-to="false">Desactivar</button>`
+                : `<button class="btn btn-warn" data-toggle="${escapeHtml(item.code)}" data-to="true">Reactivar</button>`}
+              <button class="btn btn-danger" data-delete="${escapeHtml(item.code)}">Eliminar</button>
+            </div>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+  }
+
+  tbody.addEventListener('click', async (e) => {
+    const editCode = e.target.getAttribute('data-edit');
+    const toggleCode = e.target.getAttribute('data-toggle');
+    const deleteCode = e.target.getAttribute('data-delete');
+    const removeDeviceCode = e.target.getAttribute('data-remove-device');
+
+    if (editCode) {
+      const item = allCodes.find((c) => c.code === editCode);
+      if (item) fillFormForEdit(item);
+      return;
+    }
+
+    if (toggleCode) {
+      const item = allCodes.find((c) => c.code === toggleCode);
+      if (!item) return;
+      const toActive = e.target.getAttribute('data-to') === 'true';
+      e.target.disabled = true;
+      try {
+        await api('/admin/codes', { method: 'POST', body: JSON.stringify({
+          code: item.code, type: item.type, label: item.label, active: toActive,
+          expiresAt: item.expiresAt, maxDevices: item.maxDevices
+        })});
+        loadCodes();
+      } catch (err) {
+        listMsg.textContent = 'No se pudo cambiar el estado del código.';
+        e.target.disabled = false;
+      }
+      return;
+    }
+
+    if (deleteCode) {
+      if (!confirm('¿Eliminar el código "' + deleteCode + '" definitivamente? Esta acción no se puede deshacer.')) return;
+      e.target.disabled = true;
+      try {
+        await api('/admin/codes', { method: 'DELETE', body: JSON.stringify({ code: deleteCode }) });
+        loadCodes();
+      } catch (err) {
+        listMsg.textContent = 'No se pudo eliminar el código.';
+        e.target.disabled = false;
+      }
+      return;
+    }
+
+    if (removeDeviceCode) {
+      const deviceId = e.target.getAttribute('data-device-id');
+      if (!confirm('¿Quitar este dispositivo del código "' + removeDeviceCode + '"? Se liberará un cupo.')) return;
+      e.target.disabled = true;
+      try {
+        await api('/admin/codes/device', { method: 'DELETE', body: JSON.stringify({ code: removeDeviceCode, deviceId }) });
+        loadCodes();
+      } catch (err) {
+        listMsg.textContent = 'No se pudo quitar el dispositivo.';
+        e.target.disabled = false;
+      }
+      return;
+    }
+  });
+})();
+</script>
+</body>
+</html>
