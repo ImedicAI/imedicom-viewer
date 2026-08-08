@@ -152,7 +152,6 @@ tr:last-child td{ border-bottom:none; }
 .muted{ color:var(--text-muted); }
 .devices-list{ display:flex; flex-direction:column; gap:4px; margin-top:4px; }
 .device-chip{
-  display:flex; align-items:center; justify-content:space-between; gap:8px;
   background:var(--panel-alt); border:1px solid var(--border); border-radius:5px;
   padding:4px 8px; font-size:11.5px; font-family:'IBM Plex Mono', monospace;
 }
@@ -160,6 +159,8 @@ tr:last-child td{ border-bottom:none; }
   background:none; border:none; color:var(--danger); cursor:pointer; font-size:11px;
   font-family:'IBM Plex Sans', sans-serif; font-weight:600; padding:0;
 }
+.device-chip-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.device-detail{ color:var(--text-muted); font-size:10.5px; margin-top:2px; }
 .row-actions{ display:flex; gap:6px; flex-wrap:wrap; }
 .empty-state{ text-align:center; color:var(--text-muted); padding:30px 0; font-size:13.5px; }
 #list-msg{ font-size:12.5px; color:var(--danger); margin-top:8px; }
@@ -453,6 +454,27 @@ tr:last-child td{ border-bottom:none; }
     return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
+  // Resumen legible del User-Agent: no busca ser exacto, solo dar una pista
+  // rápida del tipo de equipo/navegador para reconocer algo fuera de lo común.
+  function summarizeUA(ua) {
+    if (!ua) return 'Equipo desconocido';
+    let os = 'Equipo desconocido';
+    if (/iphone/i.test(ua)) os = 'iPhone';
+    else if (/ipad/i.test(ua)) os = 'iPad';
+    else if (/android/i.test(ua)) os = 'Android';
+    else if (/windows/i.test(ua)) os = 'Windows';
+    else if (/mac ?os/i.test(ua)) os = 'Mac';
+    else if (/linux/i.test(ua)) os = 'Linux';
+
+    let browser = '';
+    if (/edg\//i.test(ua)) browser = 'Edge';
+    else if (/chrome\//i.test(ua) && !/edg\//i.test(ua)) browser = 'Chrome';
+    else if (/firefox\//i.test(ua)) browser = 'Firefox';
+    else if (/safari\//i.test(ua) && !/chrome\//i.test(ua)) browser = 'Safari';
+
+    return browser ? (os + ' · ' + browser) : os;
+  }
+
   async function loadCodes() {
     listMsg.textContent = '';
     try {
@@ -491,7 +513,7 @@ tr:last-child td{ border-bottom:none; }
         const devices = item.devices || [];
         const devicesLabel = item.maxDevices
           ? (devices.length + ' / ' + item.maxDevices)
-          : '<span class="muted">Sin límite</span>';
+          : (devices.length + ' <span class="muted">(sin límite)</span>');
 
         const tr = document.createElement('tr');
         tr.innerHTML = `
@@ -504,8 +526,11 @@ tr:last-child td{ border-bottom:none; }
             ${devicesLabel}
             ${devices.length ? `<div class="devices-list">${devices.map(d => `
               <div class="device-chip">
-                <span title="${escapeHtml(d.id)}">${escapeHtml(d.label || d.id.slice(0,8))}</span>
-                <button data-remove-device="${escapeHtml(item.code)}" data-device-id="${escapeHtml(d.id)}">quitar</button>
+                <div class="device-chip-row">
+                  <span title="${escapeHtml(d.id)}">${escapeHtml(d.label || d.id.slice(0,8))}</span>
+                  <button data-remove-device="${escapeHtml(item.code)}" data-device-id="${escapeHtml(d.id)}">quitar</button>
+                </div>
+                <div class="device-detail">${escapeHtml(summarizeUA(d.userAgent))}${d.location ? ' · ' + escapeHtml(d.location) : ''}</div>
               </div>`).join('')}</div>` : ''}
           </td>
           <td>
