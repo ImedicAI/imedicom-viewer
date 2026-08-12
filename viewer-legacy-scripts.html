@@ -1,0 +1,3394 @@
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js" onerror="window.__dvPdfFailed=true"></script>
+<script>
+(function(){
+  // ---- Lector DICOM propio (sin dependencias externas) ----
+  // Soporta: Explicit VR Little Endian y Implicit VR Little Endian, sin compresion.
+  const dicomParser = {
+    parseDicom: function(byteArray){
+      function readUint16(o){ return byteArray[o] | (byteArray[o+1]<<8); }
+      function readUint32(o){ return (byteArray[o] | (byteArray[o+1]<<8) | (byteArray[o+2]<<16) | (byteArray[o+3]<<24)) >>> 0; }
+      function pad4(n){ return n.toString(16).padStart(4,'0'); }
+      function tagStr(g,e){ return 'x' + pad4(g) + pad4(e); }
+
+      const longVRs = new Set(['OB','OW','OF','SQ','UT','UN','OD','OL','UC','UR']);
+      const elements = {};
+      let offset = 0;
+      let hasPreamble = false;
+
+      if (byteArray.length > 132) {
+        const magic = String.fromCharCode(byteArray[128],byteArray[129],byteArray[130],byteArray[131]);
+        if (magic === 'DICM') { hasPreamble = true; offset = 132; }
+      }
+
+      let transferSyntax = null;
+
+      if (hasPreamble) {
+        while (offset < byteArray.length) {
+          const group = readUint16(offset);
+          if (group !== 0x0002) break;
+          const element = readUint16(offset+2);
+          const vr = String.fromCharCode(byteArray[offset+4], byteArray[offset+5]);
+          let length, valueOffset;
+          if (longVRs.has(vr)) { length = readUint32(offset+8); valueOffset = offset+12; }
+          else { length = readUint16(offset+6); valueOffset = offset+8; }
+          elements[tagStr(group,element)] = { dataOffset: valueOffset, length: length, vr: vr };
+          offset = valueOffset + length;
+        }
+        const tsElem = elements['x00020010'];
+        if (tsElem) {
+          let str = '';
+          for (let i=0;i<tsElem.length;i++){ const c = byteArray[tsElem.dataOffset+i]; if (c!==0) str += String.fromCharCode(c); }
+          transferSyntax = str.trim();
+        }
+      }
+
+      let isExplicitVR = true;
+      if (transferSyntax === '1.2.840.10008.1.2') isExplicitVR = false;
+      if (!hasPreamble) isExplicitVR = false;
+
+      const encapsulated = !!transferSyntax && (
+        transferSyntax.indexOf('1.2.840.10008.1.2.4') === 0 ||
+        transferSyntax.indexOf('1.2.840.10008.1.2.5') === 0 ||
+        transferSyntax.indexOf('1.2.840.10008.1.2.6') === 0
+      );
+
+      // Salta el contenido de una secuencia (SQ) de longitud indefinida, terminada
+      // por un Sequence Delimitation Item (FFFE,E0DD). Es una construccion normal
+      // de DICOM, no tiene relacion con compresion de imagen. Los Items dentro de
+      // la secuencia tambien pueden tener longitud indefinida (terminados por
+      // Item Delimitation FFFE,E00D), por lo que ambas funciones se recorren
+      // mutuamente para soportar cualquier nivel de anidamiento.
+      function skipSequenceUndefined(startOffset, explicitVR){
+        let o = startOffset;
+        while (o < byteArray.length - 8) {
+          const g = readUint16(o), e = readUint16(o+2);
+          const len = readUint32(o+4);
+          o += 8;
+          if (g === 0xFFFE && e === 0xE0DD) break; // fin de secuencia
+          if (g === 0xFFFE && e === 0xE000) { // Item
+            if (len === 0xFFFFFFFF) o = skipItemUndefined(o, explicitVR);
+            else o += len;
+          } else {
+            break; // estructura inesperada, salimos por seguridad
+          }
+        }
+        return o;
+      }
+      function skipItemUndefined(startOffset, explicitVR){
+        let o = startOffset;
+        while (o < byteArray.length - 8) {
+          const g = readUint16(o), e = readUint16(o+2);
+          if (g === 0xFFFE && e === 0xE00D) { o += 8; break; } // fin de item
+          let vr, len, vOff;
+          if (explicitVR) {
+            vr = String.fromCharCode(byteArray[o+4], byteArray[o+5]);
+            if (longVRs.has(vr)) { len = readUint32(o+8); vOff = o+12; }
+            else { len = readUint16(o+6); vOff = o+8; }
+          } else {
+            len = readUint32(o+4); vOff = o+8;
+          }
+          if (len === 0xFFFFFFFF) vOff = skipSequenceUndefined(vOff, explicitVR);
+          else vOff += len;
+          o = vOff;
+        }
+        return o;
+      }
+      // alias usado mas abajo
+      function skipUndefinedLength(startOffset){ return skipSequenceUndefined(startOffset, isExplicitVR); }
+
+      while (offset < byteArray.length - 8) {
+        const group = readUint16(offset);
+        const element = readUint16(offset+2);
+        let vr, length, valueOffset;
+        if (isExplicitVR) {
+          vr = String.fromCharCode(byteArray[offset+4], byteArray[offset+5]);
+          if (longVRs.has(vr)) { length = readUint32(offset+8); valueOffset = offset+12; }
+          else { length = readUint16(offset+6); valueOffset = offset+8; }
+        } else {
+          vr = null; length = readUint32(offset+4); valueOffset = offset+8;
+        }
+        if (length === 0xFFFFFFFF) {
+          if (group === 0x7fe0 && element === 0x0010) {
+            // Pixel data de longitud indefinida = encapsulado/comprimido (JPEG, etc.)
+            elements[tagStr(group,element)] = { dataOffset: valueOffset, length: -1, vr: vr, undefinedLength: true };
+            break;
+          }
+          // Secuencia normal (SQ) de longitud indefinida: se salta y se sigue leyendo
+          const contentEnd = skipUndefinedLength(valueOffset);
+          elements[tagStr(group,element)] = { dataOffset: valueOffset, length: contentEnd - valueOffset, vr: vr };
+          offset = contentEnd;
+          continue;
+        }
+        elements[tagStr(group,element)] = { dataOffset: valueOffset, length: length, vr: vr };
+        offset = valueOffset + length;
+        if (group === 0x7fe0 && element === 0x0010) break;
+      }
+
+      function stringVal(tag){
+        const el = elements[tag];
+        if (!el || el.length <= 0) return '';
+        let str = '';
+        for (let i=0;i<el.length;i++){ str += String.fromCharCode(byteArray[el.dataOffset+i]); }
+        return str.replace(/\0/g,'').trim();
+      }
+      function uint16Val(tag){
+        const el = elements[tag];
+        if (!el) return undefined;
+        return byteArray[el.dataOffset] | (byteArray[el.dataOffset+1]<<8);
+      }
+
+      return { elements: elements, byteArray: byteArray, string: stringVal, uint16: uint16Val, encapsulated: encapsulated, transferSyntax: transferSyntax };
+    }
+  };
+
+  const state = { files: [], activeIndex: -1 };
+
+  // ==================== Pantalla completa (sin distractores del navegador) ====================
+  // Se intenta activar automaticamente al entrar con el codigo de acceso.
+  // PERO: si ya habia una sesion guardada de una vez anterior, el ingreso
+  // es automatico (sin que la persona de clic en "Entrar"), y ahi los
+  // navegadores BLOQUEAN el pedido de pantalla completa porque no vino
+  // pegado a un gesto real del usuario -- por diseño de seguridad, no se
+  // puede saltar esta regla. Por eso hay un respaldo: el primer clic que
+  // la persona haga en cualquier parte de la pantalla (una vez adentro)
+  // tambien dispara el pedido.
+  //
+  // Controles (esquina superior derecha), fijos, sin cambiar de icono:
+  //  - Minimizar: sale de pantalla completa SOLO temporalmente -- pensado
+  //    para acomodar la ventana a mitad de pantalla (Windows+flecha) y
+  //    poder arrastrar un archivo desde el Explorador. Apenas se cargan
+  //    archivos (arrastrados o elegidos con el selector), vuelve sola a
+  //    pantalla completa.
+  //  - X: sale de pantalla completa de forma normal, sin volver a entrar
+  //    sola despues.
+  let fsReturnAfterLoad = false;
+  window.requestViewerFullscreen = function(){
+    const el = document.documentElement;
+    if (document.fullscreenElement || !el.requestFullscreen) return;
+    el.requestFullscreen().catch(() => {});
+  };
+  function exitFullscreenSafe(){
+    if (document.fullscreenElement && document.exitFullscreen) {
+      document.exitFullscreen().catch(() => {});
+    }
+  }
+  function reenterFullscreenIfPending(){
+    if (fsReturnAfterLoad) {
+      fsReturnAfterLoad = false;
+      window.requestViewerFullscreen();
+    }
+  }
+
+  // Respaldo para cualquier caso donde la pantalla completa se corte sin
+  // que el codigo lo pida explicitamente -- los dos casos reales
+  // detectados son: 1) sesion guardada (login automatico, sin clic en
+  // "Entrar"), y 2) el propio selector de carpeta del sistema operativo
+  // (showDirectoryPicker, el que aparece al descargar) hace que el
+  // navegador SALGA de pantalla completa por su cuenta como medida de
+  // seguridad -- eso esta fuera de nuestro control, pero se puede volver a
+  // entrar apenas la persona vuelva a interactuar con la pagina. El primer
+  // clic real que la persona haga en cualquier parte, mientras el visor
+  // este desbloqueado y no este en pantalla completa, dispara el pedido.
+  // Se quita el listener apenas se usa una vez, para no interferir con
+  // nada mas despues -- pero se puede volver a "armar" llamando de nuevo a
+  // armFullscreenReentryOnNextClick() (se hace despues de cada descarga).
+  function firstClickFullscreenFallback(e){
+    document.removeEventListener('click', firstClickFullscreenFallback);
+    // Si el primer clic cayo justo sobre los botones de pantalla completa,
+    // ellos ya se encargan solos -- disparar el pedido tambien desde aca
+    // generaria dos pedidos simultaneos que se pisan entre si y terminan
+    // fallando los dos.
+    if (e && e.target && e.target.closest && e.target.closest('#dv-fullscreen-controls')) return;
+    const rootEl = document.getElementById('dv-root');
+    if (rootEl && !rootEl.classList.contains('dv-locked') && !document.fullscreenElement) {
+      window.requestViewerFullscreen();
+    }
+  }
+  function armFullscreenReentryOnNextClick(){
+    document.removeEventListener('click', firstClickFullscreenFallback); // evita duplicar el listener si ya estaba armado
+    document.addEventListener('click', firstClickFullscreenFallback);
+  }
+  armFullscreenReentryOnNextClick();
+
+  const fsMinimizeBtn = document.getElementById('dv-fs-minimize');
+  const fsExitBtn = document.getElementById('dv-fs-exit');
+  if (fsMinimizeBtn) {
+    fsMinimizeBtn.addEventListener('click', () => {
+      // El icono queda siempre igual (no cambia de forma), pero la accion
+      // se adapta al estado actual, para que el boton nunca se quede "sin
+      // reaccionar": si ya esta en pantalla completa, la reduce (pensado
+      // para arrastrar un archivo); si no lo esta, la activa.
+      if (document.fullscreenElement) {
+        fsReturnAfterLoad = true;
+        exitFullscreenSafe();
+      } else {
+        window.requestViewerFullscreen();
+      }
+    });
+  }
+  if (fsExitBtn) {
+    fsExitBtn.addEventListener('click', () => {
+      fsReturnAfterLoad = false;
+      exitFullscreenSafe();
+    });
+  }
+
+
+  const dropEl = document.getElementById('dv-drop');
+  const inputEl = document.getElementById('dv-file-input');
+  const listEl = document.getElementById('dv-filelist');
+  const canvas = document.getElementById('dv-canvas');
+  const emptyEl = document.getElementById('dv-empty');
+  const metaEl = document.getElementById('dv-meta');
+  const wlSlider = document.getElementById('dv-wl');
+  const wwSlider = document.getElementById('dv-ww');
+  const wlVal = document.getElementById('dv-wl-val');
+  const wwVal = document.getElementById('dv-ww-val');
+  const exportJpgBtn = document.getElementById('dv-export-jpg');
+  const exportMainBtn = document.getElementById('dv-export-main');
+  const exportPdfBtn = document.getElementById('dv-export-pdf');
+  const exportOpenerBtn = document.getElementById('dv-export-opener');
+  const exportAllMainBtn = document.getElementById('dv-export-all-main');
+  const exportAllOpenerBtn = document.getElementById('dv-export-all-opener');
+  const resSelect = document.getElementById('dv-res');
+
+  // ---- Carpeta de descarga (icono discreto) --------------------------
+  // Los navegadores no permiten a una pagina web listar "Disco C/D/E"
+  // directamente (aislamiento por seguridad). Lo que si permite Chrome/
+  // Edge/Opera via File System Access API es abrir el explorador nativo
+  // del equipo (showDirectoryPicker), donde se navega libremente a
+  // cualquier disco/carpeta y se elige o crea una. Firefox/Safari no
+  // soportan esto: el icono queda deshabilitado y las descargas siguen
+  // el comportamiento normal del navegador.
+  const chooseFolderBtn = document.getElementById('dv-choose-folder');
+  const fsApiSupported = typeof window.showDirectoryPicker === 'function';
+  let downloadDirHandle = null;
+
+  if (!fsApiSupported && chooseFolderBtn) {
+    chooseFolderBtn.disabled = true;
+    chooseFolderBtn.style.opacity = '.35';
+    chooseFolderBtn.title = 'No disponible en este navegador (usa Chrome, Edge u Opera)';
+  }
+
+  function pad2(n){ return String(n).padStart(2, '0'); }
+
+  // IMPORTANTE: ya NO se crea ninguna subcarpeta automatica (antes se
+  // armaba una carpeta por fecha dentro de la elegida). Eso causaba que si
+  // en una sesion posterior el usuario volvia a usar el selector de carpeta
+  // y por error navegaba DENTRO de una carpeta ya creada por una descarga
+  // anterior (en vez de volver a la carpeta base), el sistema anidaba una
+  // subcarpeta de fecha dentro de otra, sucesivamente. Ahora todo se
+  // guarda siempre PLANO, directo en la carpeta que el usuario eligio con
+  // el icono de carpeta -- sin ninguna capa extra.
+  async function resolveActiveDirHandle(){
+    return downloadDirHandle;
+  }
+
+  // Abre el selector de carpeta del sistema operativo y guarda el handle
+  // elegido. Devuelve true si el usuario eligio una carpeta, false si
+  // cancelo el dialogo o el navegador no soporta esta funcion.
+  async function pickDownloadFolder(){
+    if (!fsApiSupported) return false;
+    try {
+      downloadDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      chooseFolderBtn.classList.add('dv-folder-active');
+      chooseFolderBtn.title = 'Carpeta: ' + downloadDirHandle.name + ' (clic para cambiar)';
+      return true;
+    } catch (err) {
+      if (err && err.name !== 'AbortError') console.error('Error al elegir carpeta de descarga', err);
+      return false;
+    }
+  }
+
+  if (chooseFolderBtn) {
+    chooseFolderBtn.addEventListener('click', pickDownloadFolder);
+  }
+
+  // Se llama SIEMPRE antes de cualquier descarga (individual o en bloque).
+  // Si el usuario todavia no eligio carpeta en esta sesion, se la pide en
+  // este momento -- una sola vez -- en vez de dejar que cada archivo caiga
+  // por separado con el cuadro nativo "Guardar como" del navegador
+  // preguntando uno por uno. Si el navegador no soporta elegir carpeta
+  // (Safari/iPad) o el usuario cancela el dialogo, sigue igual con la
+  // descarga normal del navegador (y ahi si va a preguntar por archivo,
+  // pero eso ya es una limitacion del navegador, no de la app).
+  async function ensureFolderChosen(){
+    if (downloadDirHandle) return true;
+    if (!fsApiSupported) return false;
+    return await pickDownloadFolder();
+  }
+
+  // Intenta guardar directamente en la carpeta elegida. Devuelve true si lo
+  // logro; false si no hay carpeta elegida o algo fallo (fallback a la
+  // descarga normal del navegador).
+  async function saveBlobToChosenFolder(blob, filename){
+    if (!downloadDirHandle) return false;
+    try {
+      const dirHandle = (await resolveActiveDirHandle()) || downloadDirHandle;
+      const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return true;
+    } catch (err) {
+      console.error('No se pudo guardar en la carpeta elegida, se usara descarga estandar', err);
+      return false;
+    }
+  }
+
+  // ---- Soporte para arrastrar CARPETAS completas (no solo archivos sueltos) ----
+  // El navegador no entrega el contenido de una carpeta en dataTransfer.files
+  // directamente -- hay que recorrerla con la API de entradas de archivos
+  // (webkitGetAsEntry / FileSystemDirectoryEntry). Reglas:
+  //  - Archivos sueltos arrastrados directo (no dentro de una carpeta): se
+  //    aceptan igual que siempre, sin filtrar por extension (compatibilidad
+  //    con el comportamiento de antes).
+  //  - Archivos que vienen DENTRO de una carpeta: solo se toman los .dcm;
+  //    el resto (PDF, JPG, Word, etc. -- los otros archivos del paciente
+  //    que no son la imagen) se descartan en silencio, sin mostrarlos como
+  //    error en la lista.
+  //  - Se puede arrastrar UNA o VARIAS carpetas a la vez (una por paciente),
+  //    y tambien mezclar carpetas + archivos sueltos en el mismo arrastre.
+  const dropMsgEl = document.getElementById('dv-drop-msg');
+
+  function readEntryAsFile(entry){
+    return new Promise((resolve, reject) => entry.file(resolve, reject));
+  }
+  function readDirEntries(dirReader){
+    // readEntries() no siempre devuelve todo de una vez (limite ~100 por
+    // llamada en algunos navegadores) -- hay que llamarlo repetidamente
+    // hasta que devuelva un lote vacio.
+    return new Promise((resolve, reject) => {
+      let all = [];
+      function next(){
+        dirReader.readEntries((batch) => {
+          if (!batch.length) { resolve(all); return; }
+          all = all.concat(batch);
+          next();
+        }, reject);
+      }
+      next();
+    });
+  }
+  async function walkEntry(entry, out, insideFolder){
+    if (!entry) return;
+    if (entry.isFile) {
+      try {
+        const file = await readEntryAsFile(entry);
+        if (!insideFolder || /\.dcm$/i.test(file.name)) {
+          out.files.push(file);
+        } else {
+          out.skipped++;
+        }
+      } catch (e) { /* archivo ilegible, se ignora */ }
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const children = await readDirEntries(reader);
+      for (const child of children) {
+        await walkEntry(child, out, true);
+      }
+    }
+  }
+  async function collectDroppedFiles(dataTransfer){
+    const items = dataTransfer.items;
+    const out = { files: [], skipped: 0 };
+    if (items && items.length && items[0].webkitGetAsEntry) {
+      const entries = Array.from(items).map(it => it.webkitGetAsEntry()).filter(Boolean);
+      for (const entry of entries) {
+        await walkEntry(entry, out, false);
+      }
+      return out;
+    }
+    // Navegador sin soporte de la API de entradas (ej. Safari viejo):
+    // se usa la lista plana tal cual, sin poder filtrar carpetas.
+    out.files = Array.from(dataTransfer.files);
+    return out;
+  }
+
+  dropEl.addEventListener('click', () => inputEl.click());
+  dropEl.addEventListener('dragover', e => { e.preventDefault(); dropEl.classList.add('dv-drag'); });
+  dropEl.addEventListener('dragleave', () => dropEl.classList.remove('dv-drag'));
+  dropEl.addEventListener('drop', async e => {
+    e.preventDefault(); dropEl.classList.remove('dv-drag');
+    if (dropMsgEl) dropMsgEl.textContent = 'Leyendo carpetas…';
+    const { files, skipped } = await collectDroppedFiles(e.dataTransfer);
+    if (dropMsgEl) {
+      if (skipped > 0) {
+        dropMsgEl.textContent = `Se cargaron ${files.length} archivo(s) .dcm — se omitieron ${skipped} archivo(s) que no eran DICOM.`;
+      } else if (files.length) {
+        dropMsgEl.textContent = `Se cargaron ${files.length} archivo(s).`;
+      } else {
+        dropMsgEl.textContent = 'No se encontró ningún archivo .dcm en lo que arrastraste.';
+      }
+    }
+    handleFiles(files);
+    reenterFullscreenIfPending();
+  });
+  inputEl.addEventListener('change', e => { handleFiles(e.target.files); reenterFullscreenIfPending(); });
+
+  // ---- Cargar archivo pegando un link (util en tablets, donde no se
+  // puede arrastrar un archivo) -- descarga el contenido del link y lo
+  // procesa exactamente igual que un archivo arrastrado o seleccionado.
+  // Los links de Google Drive se detectan solos y pasan por el proxy del
+  // servidor (necesario porque Drive no permite descargarlos directo
+  // desde el navegador de otro sitio). Cualquier otro link necesita ser
+  // de descarga DIRECTA y permitir acceso entre sitios (CORS); un link a
+  // una pagina web (no al archivo en si) no va a funcionar.
+  const linkToggle = document.getElementById('dv-link-toggle');
+  const linkRow = document.getElementById('dv-link-row');
+  const linkInput = document.getElementById('dv-link-input');
+  const linkLoadBtn = document.getElementById('dv-link-load');
+  const linkMsg = document.getElementById('dv-link-msg');
+
+  linkToggle.addEventListener('click', () => {
+    const show = linkRow.style.display === 'none';
+    linkRow.style.display = show ? 'flex' : 'none';
+    linkMsg.textContent = '';
+    if (show) linkInput.focus();
+  });
+
+  function extractDriveFileId(rawUrl){
+    try {
+      const u = new URL(rawUrl);
+      if (!/drive\.google\.com$/.test(u.hostname.replace(/^www\./, ''))) return null;
+      let m = u.pathname.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+      if (m) return m[1];
+      const idParam = u.searchParams.get('id');
+      return idParam || null;
+    } catch (e) { return null; }
+  }
+
+  function getAccessCode(){
+    try {
+      const raw = localStorage.getItem('dv_access_session');
+      const session = raw ? JSON.parse(raw) : null;
+      return session && session.code ? session.code : null;
+    } catch (e) { return null; }
+  }
+
+  async function loadFromLink(){
+    const url = linkInput.value.trim();
+    if (!url) return;
+    linkLoadBtn.disabled = true;
+    linkMsg.textContent = 'Descargando…';
+    linkMsg.className = 'dv-link-msg';
+    try {
+      const driveId = extractDriveFileId(url);
+      let resp, filename;
+      if (driveId) {
+        const code = getAccessCode();
+        if (!code || !window.ACCESS_WORKER_URL) throw new Error('no_access_code');
+        resp = await fetch(window.ACCESS_WORKER_URL + '/drive-fetch?id=' + encodeURIComponent(driveId) + '&code=' + encodeURIComponent(code));
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({}));
+          throw new Error(errData.detail || errData.error || ('http_' + resp.status));
+        }
+        const disposition = resp.headers.get('content-disposition') || '';
+        const dispMatch = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+        filename = dispMatch ? decodeURIComponent(dispMatch[1]) : 'archivo_drive.dcm';
+      } else {
+        resp = await fetch(url);
+        if (!resp.ok) throw new Error('http_' + resp.status);
+        filename = decodeURIComponent(url.split('/').pop().split('?')[0] || '') || 'archivo.dcm';
+      }
+      const blob = await resp.blob();
+      if (!/\.dcm$/i.test(filename)) filename += '.dcm';
+      const file = new File([blob], filename, { type: blob.type || 'application/dicom' });
+      handleFiles([file]);
+      linkMsg.textContent = 'Cargado.';
+      linkMsg.className = 'dv-link-msg dv-link-ok';
+      linkInput.value = '';
+    } catch (err) {
+      linkMsg.textContent = (err && err.message && err.message !== 'no_access_code' && !/^http_/.test(err.message))
+        ? err.message
+        : 'No se pudo cargar ese link (debe ser un link de descarga directa, o un link de Drive compartido públicamente).';
+      linkMsg.className = 'dv-link-msg dv-link-err';
+    } finally {
+      linkLoadBtn.disabled = false;
+    }
+  }
+  linkLoadBtn.addEventListener('click', loadFromLink);
+  linkInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadFromLink(); });
+
+  function handleFiles(fileList){
+    Array.from(fileList).forEach(file => {
+      const entry = { name: file.name, status: 'loading', dataSet: null, pixel: null, meta: null, error: null, rotation: 0, flipH: false, flipV: false, invert: false, annotations: [] };
+      state.files.push(entry);
+      const idx = state.files.length - 1;
+      renderFileList();
+
+      const reader = new FileReader();
+      reader.onload = function(ev){
+        try {
+          const byteArray = new Uint8Array(ev.target.result);
+          const dataSet = dicomParser.parseDicom(byteArray);
+          entry.dataSet = dataSet;
+          entry.meta = extractMeta(dataSet);
+          entry.pixel = extractPixel(dataSet);
+          entry.pixel.origWindowCenter = entry.pixel.windowCenter;
+          entry.pixel.origWindowWidth = entry.pixel.windowWidth;
+          // Las radiografias de TORAX deben mostrarse siempre en horizontal
+          // (segun lo establecido). Si el archivo trae los pixeles en vertical
+          // (alto > ancho), se gira 90 grados automaticamente por defecto.
+          // Ademas, confirmado con varios archivos consecutivos de este equipo
+          // (Carestream Point-of-Care): la punta del corazon aparece apuntando
+          // al lado derecho del paciente (marcador "R") en vez del izquierdo
+          // ("I", lo anatomicamente correcto) -> se aplica tambien un espejo
+          // horizontal por defecto para corregirlo.
+          //
+          // TORAX sigue siendo el uso mas frecuente -> esta regla se aplica
+          // por defecto (igual que antes), INCLUSO si el equipo no llena el
+          // tag BodyPartExamined (pasa con algunos equipos). Solo se excluye
+          // explicitamente cuando el tag SI esta presente y confirma columna
+          // (SPINE/COLUMNA/VERTEB) -- ahi columna llega vertical de fabrica y
+          // NO debe rotarse (verificado con 2 archivos DICOM reales:
+          // BodyPartExamined="TSPINE", Rows=2866/Columns=1812 y
+          // Rows=2471/Columns=1996, ya verticales, correctos sin rotar).
+          if (entry.pixel.rows > entry.pixel.cols && !entry.meta.isSpineBodyPart) {
+            entry.rotation = 90;
+            entry.flipH = true;
+          }
+          entry.status = 'ok';
+        } catch (err) {
+          entry.status = 'error';
+          entry.error = err && err.message ? err.message : 'No se pudo leer el archivo';
+        }
+        renderFileList();
+        if (entry.status === 'ok') selectFile(idx);
+      };
+      reader.onerror = function(){
+        entry.status = 'error';
+        entry.error = 'Error de lectura del archivo';
+        renderFileList();
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function dicomStr(dataSet, tag){
+    try { const v = dataSet.string(tag); return v ? v.trim() : ''; } catch(e){ return ''; }
+  }
+
+  function formatName(raw){
+    if (!raw) return '';
+    return raw.split('^').filter(Boolean).join(' ');
+  }
+
+  function formatDate(raw){
+    if (!raw || raw.length < 8) return raw || '';
+    return raw.substring(6,8) + '/' + raw.substring(4,6) + '/' + raw.substring(0,4);
+  }
+
+  function extractMeta(dataSet){
+    const patientName = formatName(dicomStr(dataSet, 'x00100010'));
+    const patientId = dicomStr(dataSet, 'x00100020');
+    const birthDate = formatDate(dicomStr(dataSet, 'x00100030'));
+    const institution = dicomStr(dataSet, 'x00080080');
+    const studyDesc = dicomStr(dataSet, 'x00081030') || dicomStr(dataSet, 'x0008103e');
+    const studyDate = formatDate(dicomStr(dataSet, 'x00080020'));
+    const studyTime = dicomStr(dataSet, 'x00080030');
+    const modality = dicomStr(dataSet, 'x00080060');
+    const laterality = dicomStr(dataSet, 'x00200062'); // Image Laterality: 'R' o 'L' si el equipo lo registro
+    let viewPosition = dicomStr(dataSet, 'x00185101').toUpperCase(); // AP, PA, LAT, LL, RL...
+    let viewSource = 'tag (0018,5101)';
+    if (!viewPosition) {
+      // Respaldo: algunos equipos dejan el tag estructurado vacio pero si
+      // escriben la vista en la descripcion. Se revisa primero la descripcion
+      // de la SERIE (especifica de esta imagen); solo si no dice nada se usa
+      // la del ESTUDIO completo (que puede mencionar "AP and LAT" juntos,
+      // ya que un estudio suele incluir ambas tomas).
+      const seriesText = dicomStr(dataSet,'x0008103e').toUpperCase();
+      const studyText = dicomStr(dataSet,'x00081030').toUpperCase();
+      const latRe = /\bLAT\b|\bLATERAL\b|\bLL\b|\bRL\b/;
+      const apRe = /\bAP\b|\bPA\b/;
+      if (latRe.test(seriesText)) { viewPosition = 'LAT'; viewSource = 'descripcion de serie'; }
+      else if (apRe.test(seriesText)) { viewPosition = 'AP'; viewSource = 'descripcion de serie'; }
+      else if (latRe.test(studyText) && !apRe.test(studyText)) { viewPosition = 'LAT'; viewSource = 'descripcion de estudio'; }
+      else if (apRe.test(studyText) && !latRe.test(studyText)) { viewPosition = 'AP'; viewSource = 'descripcion de estudio'; }
+    }
+    const isFrontal = viewPosition === 'AP' || viewPosition === 'PA';
+    const timeFmt = studyTime && studyTime.length >= 6 ? studyTime.substring(0,2)+':'+studyTime.substring(2,4)+':'+studyTime.substring(4,6) : studyTime;
+
+    // Parte del cuerpo examinada (tag DICOM 0018,0015). Se usa para decidir
+    // si aplica la regla de auto-rotacion pensada para torax (ver mas abajo,
+    // donde se carga el archivo) -- columna (SPINE/TSPINE/LSPINE/CSPINE) NO
+    // debe rotarse igual que torax: torax normalmente se muestra horizontal,
+    // columna normalmente se muestra vertical, son casos opuestos.
+    const bodyPartExamined = (dicomStr(dataSet, 'x00180015') || '').toUpperCase();
+    const isChestBodyPart = /CHEST|THORAX|TORAX/.test(bodyPartExamined);
+    const isSpineBodyPart = /SPINE|COLUMNA|VERTEB/.test(bodyPartExamined);
+
+    // Indice de Exposicion / Deviation Index (Modulo de Dosis de Adquisicion
+    // de Rayos X). No todos los equipos los graban -- se muestran solo si
+    // el archivo los trae, sin inventar ni calcular un valor propio.
+    const exposureIndex = dicomStr(dataSet, 'x00181411');
+    const targetExposureIndex = dicomStr(dataSet, 'x00181412');
+    const deviationIndex = dicomStr(dataSet, 'x00181413');
+
+    return {
+      patientName: patientName || '(sin nombre)',
+      patientNameRaw: dicomStr(dataSet, 'x00100010') || '',
+      patientId: patientId || '(sin ID)',
+      birthDate: birthDate || '(sin fecha)',
+      institution: institution,
+      institutionEdited: false,
+      studyDesc: studyDesc || '(sin descripción)',
+      studyDate: studyDate || '',
+      studyTime: timeFmt || '',
+      studyDateTimeDisplay: ((studyDate||'') + ' ' + (timeFmt||'')).trim(),
+      modality: modality || '',
+      laterality: laterality || '',
+      viewPosition: viewPosition || '',
+      viewSource: viewSource,
+      isFrontal: isFrontal,
+      bodyPartExamined: bodyPartExamined || '',
+      isChestBodyPart: isChestBodyPart,
+      isSpineBodyPart: isSpineBodyPart,
+      exposureIndex: exposureIndex || '',
+      targetExposureIndex: targetExposureIndex || '',
+      deviationIndex: deviationIndex || ''
+    };
+  }
+
+  function extractPixel(dataSet){
+    const rows = dataSet.uint16('x00280010');
+    const cols = dataSet.uint16('x00280011');
+    const bitsAllocated = dataSet.uint16('x00280100') || 16;
+    const bitsStored = dataSet.uint16('x00280101') || bitsAllocated;
+    const pixelRepresentation = dataSet.uint16('x00280103') || 0;
+    const samplesPerPixel = dataSet.uint16('x00280002') || 1;
+    const photometric = (dicomStr(dataSet, 'x00280004') || '').toUpperCase();
+    const planarConfig = dataSet.uint16('x00280006') || 0;
+    let windowCenter = parseFloat((dicomStr(dataSet,'x00281050')||'').split('\\')[0]);
+    let windowWidth = parseFloat((dicomStr(dataSet,'x00281051')||'').split('\\')[0]);
+    const rescaleIntercept = parseFloat(dicomStr(dataSet,'x00281052')) || 0;
+    const rescaleSlope = parseFloat(dicomStr(dataSet,'x00281053')) || 1;
+
+    const pixelDataElement = dataSet.elements.x7fe00010;
+    if (!pixelDataElement) throw new Error('El archivo no contiene datos de imagen (pixel data)');
+    if (dataSet.encapsulated || pixelDataElement.undefinedLength) {
+      throw new Error('Imagen comprimida (JPEG/JPEG2000) — no soportada en esta versión del visor. Transfer syntax: ' + (dataSet.transferSyntax || 'desconocido'));
+    }
+
+    const byteArray = dataSet.byteArray;
+    const offset = pixelDataElement.dataOffset;
+    let raw;
+    if (bitsAllocated === 16) {
+      raw = (pixelRepresentation === 1)
+        ? new Int16Array(byteArray.buffer, byteArray.byteOffset + offset, rows*cols*samplesPerPixel)
+        : new Uint16Array(byteArray.buffer, byteArray.byteOffset + offset, rows*cols*samplesPerPixel);
+    } else {
+      raw = new Uint8Array(byteArray.buffer, byteArray.byteOffset + offset, rows*cols*samplesPerPixel);
+    }
+
+    // Calcula percentiles reales de los pixeles (histograma), para detectar si
+    // la ventana (WindowCenter/Width) que declara el archivo realmente coincide
+    // con los datos, o si es un valor generico de fabrica que no corresponde
+    // (caso real detectado: equipo que deja WC/WW en el rango teorico completo
+    // del bit depth, aunque los datos reales usan solo una fraccion de ese rango).
+    function computePercentiles(arr, loP, hiP){
+      let mn=Infinity, mx=-Infinity;
+      for (let i=0;i<arr.length;i++){ const v=arr[i]; if(v<mn)mn=v; if(v>mx)mx=v; }
+      if (mx===mn) return {lo:mn, hi:mx, median:mn, p15:mn, p85:mn};
+      const bins = 4096;
+      const hist = new Uint32Array(bins);
+      const scale = (bins-1)/(mx-mn);
+      for (let i=0;i<arr.length;i++){
+        let idx = Math.round((arr[i]-mn)*scale);
+        hist[idx]++;
+      }
+      const total = arr.length;
+      function findPercentile(p){
+        const targetCount = total*p;
+        let cum=0;
+        for (let b=0;b<bins;b++){ cum+=hist[b]; if (cum>=targetCount) return mn + b/scale; }
+        return mx;
+      }
+      const loVal = findPercentile(loP);
+      const hiVal = findPercentile(hiP);
+      const medVal = findPercentile(0.5);
+      const p15Val = findPercentile(0.15);
+      const p85Val = findPercentile(0.85);
+      return {lo:loVal, hi:hiVal, median:medVal, p15:p15Val, p85:p85Val};
+    }
+
+    if (samplesPerPixel === 1) {
+      // Percentiles 5%-95% (no 0.5%-99.5%): un rango tan amplio dejaba TODA
+      // la imagen comprimida en tonos grises claros, sin negros ni blancos
+      // reales (verificado con un caso real: apenas 3.7% de pixeles bajaban
+      // de 60/255). Con 5%-95% se logra contraste real (negros ~12, blancos
+      // ~230), aceptando que el 5% mas extremo de cada lado se recorte a
+      // negro/blanco puro — normal en radiografia, no es perdida de info util.
+      const pct = computePercentiles(raw, 0.05, 0.95);
+      const rLo = pct.lo*rescaleSlope + rescaleIntercept;
+      const rHi = pct.hi*rescaleSlope + rescaleIntercept;
+      const rMed = pct.median*rescaleSlope + rescaleIntercept;
+      const dataSpan = rHi - rLo;
+
+      // Deteccion DIRECTA del WC/WW "de fabrica" (sin calibrar): el equipo
+      // (confirmado con Carestream real) a veces deja el WC/WW en el rango
+      // TEORICO COMPLETO del bit depth del archivo -- es decir, exactamente
+      // WC = 2^(bitsStored-1) y WW = 2^bitsStored - 1 (ej. 2048/4095 para
+      // 12 bits). Este valor no tiene relacion real con los pixeles de esa
+      // imagen en particular -- es un placeholder. Se detecta de forma
+      // exacta (no por aproximacion de rango) y SIEMPRE se recalcula con
+      // los datos reales cuando se detecta, sin importar cuan angosto o
+      // ancho salga el histograma real -- el metodo anterior (comparar
+      // dataSpan contra 35% del WW) fallaba en torax porque el dataSpan
+      // real de una radiografia de torax cae, por casualidad, muy cerca de
+      // ese 35% -- a veces arriba, a veces abajo -- disparando la
+      // correccion en unos pacientes si y en otros no, de forma inconsistente
+      // (confirmado con 5 casos reales del mismo equipo, todos con WC/WW de
+      // fabrica identico, pero solo algunos cruzaban el umbral anterior).
+      const factoryWC = Math.pow(2, bitsStored - 1);
+      const factoryWW = Math.pow(2, bitsStored) - 1;
+      const isFactoryDefaultWindow = !isNaN(windowCenter) && !isNaN(windowWidth) &&
+        Math.abs(windowCenter - factoryWC) < 1 && Math.abs(windowWidth - factoryWW) < 1;
+
+      if (isNaN(windowCenter) || isNaN(windowWidth) || isFactoryDefaultWindow) {
+        // Se centra en la MEDIANA real (no en el promedio de los extremos):
+        // asi el tono "tipico" de la imagen cae en gris medio real, en vez
+        // de quedar sesgado hacia el blanco cuando el histograma es asimetrico
+        // (verificado con un caso real donde la mediana estaba muy por debajo
+        // del promedio de los percentiles extremos, dejando la imagen muy clara).
+        const halfSpan = Math.max(rMed-rLo, rHi-rMed) * 1.1;
+        windowWidth = (halfSpan*2) || 1;
+        windowCenter = rMed;
+      } else if (dataSpan > 0 && dataSpan < windowWidth*0.35) {
+        // Respaldo para equipos/casos donde el "de fabrica" no coincide
+        // exactamente con la formula del bit depth, pero el archivo igual
+        // trae una ventana mucho mas ancha de lo que realmente usan los
+        // pixeles. Umbral calibrado con columna lumbosacra (ver historial).
+        const halfSpan = Math.max(rMed-rLo, rHi-rMed) * 1.1;
+        windowWidth = halfSpan*2;
+        windowCenter = rMed;
+      }
+    } else if (isNaN(windowCenter) || isNaN(windowWidth)) {
+      let min=Infinity, max=-Infinity;
+      for (let i=0;i<raw.length;i++){ if(raw[i]<min)min=raw[i]; if(raw[i]>max)max=raw[i]; }
+      windowCenter = (max+min)/2; windowWidth = (max-min) || 1;
+    }
+
+    const pixelSpacingRaw = dicomStr(dataSet, 'x00280030') || dicomStr(dataSet, 'x00181164') || '';
+    const pixelSpacingParts = pixelSpacingRaw.split('\\').map(parseFloat);
+    // mm por pixel, promediando fila/columna (en radiografia suelen ser
+    // isotropicos -- ej. 0.14x0.14). Si el tag no esta presente, queda NaN y
+    // las herramientas de medicion muestran solo pixeles, sin mm.
+    const mmPerPixel = (pixelSpacingParts.length === 2 && !isNaN(pixelSpacingParts[0]))
+      ? (pixelSpacingParts[0] + pixelSpacingParts[1]) / 2
+      : NaN;
+
+    return {
+      rows, cols, raw, samplesPerPixel, photometric, planarConfig,
+      windowCenter, windowWidth, rescaleIntercept, rescaleSlope, bitsAllocated,
+      mmPerPixel,
+      // Rango del slider adaptado a esta imagen en particular (en vez de un
+      // rango fijo enorme tipo 0-4000): asi cada paso del control representa
+      // un cambio pequeno y preciso, en vez de saltos grandes de golpe.
+      wlRangeMin: windowCenter - windowWidth * 1.2,
+      wlRangeMax: windowCenter + windowWidth * 1.2,
+      wwRangeMax: Math.max(windowWidth * 3, 10)
+    };
+  }
+
+  // Calcula, para imagenes en vista lateral, hacia que lado (izquierda/derecha)
+  // apunta la convexidad de la columna, analizando el centro de masa oseo por
+  // franjas horizontales y viendo hacia que lado se desvia respecto a la linea
+  // recta que une la parte superior con la inferior (la "cuerda" de la curva).
+  function detectConvexitySide(p){
+    if (p.samplesPerPixel !== 1) return null; // solo aplica a imagenes monocromas
+    const w = p.cols, h = p.rows;
+    const wc = p.windowCenter, ww = Math.max(p.windowWidth,1);
+    const lo = wc - ww/2, hi = wc + ww/2;
+    const invert = p.photometric === 'MONOCHROME1';
+
+    function grayAt(x,y){
+      let val = p.raw[y*w+x]*p.rescaleSlope + p.rescaleIntercept;
+      let g = ((val-lo)/(hi-lo))*255;
+      g = Math.max(0, Math.min(255, g));
+      return invert ? 255-g : g;
+    }
+
+    const bandCount = 14;
+    const centers = [];
+    const bandHalf = Math.max(1, Math.floor(h*0.01));
+    for (let i=0;i<bandCount;i++){
+      const yFrac = 0.10 + 0.80*(i/(bandCount-1));
+      const yc = Math.floor(h*yFrac);
+      let sumW=0, sumWX=0;
+      for (let y=Math.max(0,yc-bandHalf); y<Math.min(h,yc+bandHalf); y++){
+        for (let x=0;x<w;x++){
+          const v = grayAt(x,y);
+          const wgt = v-60;
+          if (wgt>0){ sumW+=wgt; sumWX+=wgt*x; }
+        }
+      }
+      if (sumW>0) centers.push({ yFrac: yFrac, x: sumWX/sumW });
+    }
+    if (centers.length < 4) return null;
+
+    // Referencia: posicion X de la franja MAS ALTA (no una cuerda entre extremos,
+    // que mezcla la deriva general hombro/pelvis con la curva real y da resultados
+    // incorrectos — verificado contra un caso real).
+    const refX = centers[0].x;
+    let sumDelta = 0;
+    for (let i=1;i<centers.length;i++){
+      sumDelta += (centers[i].x - refX);
+    }
+    const avgDelta = sumDelta/(centers.length-1);
+    // umbral minimo para evitar decidir un lado por ruido en columnas casi rectas
+    if (Math.abs(avgDelta) < w*0.01) return null;
+    return avgDelta > 0 ? 'right' : 'left';
+  }
+
+  function renderFileList(){
+    listEl.innerHTML = '';
+    state.files.forEach((f, i) => {
+      const div = document.createElement('div');
+      div.className = 'dv-file-item' + (i === state.activeIndex ? ' active' : '');
+      const statusText = f.status === 'loading' ? 'Cargando...' : (f.status === 'ok' ? 'Legible ✓' : ('Error: ' + f.error));
+      const statusClass = f.status === 'error' ? 'err' : (f.status === 'ok' ? 'ok' : '');
+
+      const infoDiv = document.createElement('div');
+      infoDiv.innerHTML = f.name + '<span class="dv-status ' + statusClass + '">' + statusText + '</span>';
+      if (f.status === 'ok') infoDiv.addEventListener('click', () => selectFile(i));
+      infoDiv.style.flex = '1';
+      infoDiv.style.minWidth = '0';
+
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'dv-file-remove';
+      removeBtn.title = 'Quitar de la lista';
+      removeBtn.textContent = '×';
+      removeBtn.addEventListener('click', (e) => { e.stopPropagation(); removeFile(i); });
+
+      div.appendChild(infoDiv);
+      div.appendChild(removeBtn);
+      listEl.appendChild(div);
+      if (i === state.activeIndex) {
+        // Mantiene visible la imagen activa dentro de la lista al navegar
+        // con las flechas del teclado (por si hay muchas imagenes cargadas
+        // y la activa queda fuera del area visible del panel).
+        requestAnimationFrame(() => div.scrollIntoView({ block: 'nearest' }));
+      }
+    });
+    exportAllOpenerBtn.disabled = !state.files.some(f => f.status === 'ok');
+    exportAllMainBtn.disabled = exportAllOpenerBtn.disabled;
+  }
+
+  function resetViewerToEmpty(){
+    canvas.style.display = 'none';
+    emptyEl.style.display = 'block';
+    metaEl.innerHTML = '';
+    exportOpenerBtn.disabled = true;
+    exportMainBtn.disabled = true;
+  }
+
+  function removeFile(i){
+    state.files.splice(i, 1);
+    if (state.activeIndex === i) {
+      state.activeIndex = -1;
+      resetViewerToEmpty();
+    } else if (state.activeIndex > i) {
+      state.activeIndex -= 1;
+    }
+    renderFileList();
+  }
+
+  function clearAllFiles(){
+    state.files = [];
+    state.activeIndex = -1;
+    resetViewerToEmpty();
+    renderFileList();
+  }
+  document.getElementById('dv-clear-all').addEventListener('click', clearAllFiles);
+
+  function selectFile(i){
+    state.activeIndex = i;
+    renderFileList();
+    if (typeof pendingPoints !== 'undefined') pendingPoints = []; // evita arrastrar puntos de Angulo/Cobb entre imagenes distintas
+    const f = state.files[i];
+    if (!f.pixel) return;
+    wlSlider.min = Math.floor(f.pixel.wlRangeMin);
+    wlSlider.max = Math.ceil(f.pixel.wlRangeMax);
+    wlSlider.step = 1;
+    wwSlider.min = 1;
+    wwSlider.max = Math.ceil(f.pixel.wwRangeMax);
+    wwSlider.step = 1;
+    wlSlider.value = f.pixel.windowCenter;
+    wwSlider.value = f.pixel.windowWidth;
+    if (typeof window.__dvResetWindowProfileState === 'function') window.__dvResetWindowProfileState();
+    if (!f.meta.isFrontal && f.meta.convexitySide === undefined) {
+      f.meta.convexitySide = detectConvexitySide(f.pixel); // 'left' | 'right' | null
+    }
+    if (typeof syncProjectionFromMeta === 'function') syncProjectionFromMeta(f);
+    updateMetaPanel(f);
+    if (typeof updateLiveReadout === 'function') updateLiveReadout(f.pixel);
+    document.getElementById('dv-invert').classList.toggle('dv-tool-active', !!f.invert);
+    zoomLevel = 1;
+    viewerWrap.classList.remove('dv-zoomed');
+    if (typeof setInteractionActive === 'function') setInteractionActive(false);
+    const zi = document.getElementById('dv-zoom-indicator');
+    if (zi) zi.style.display = 'none';
+    draw(f, 1);
+    exportOpenerBtn.disabled = false;
+    exportMainBtn.disabled = false;
+  }
+
+  wlSlider.addEventListener('input', () => { if (state.activeIndex>=0){ const p=state.files[state.activeIndex].pixel; p.windowCenter = parseFloat(wlSlider.value); wlVal.textContent = Math.round(p.windowCenter); draw(state.files[state.activeIndex],1);} });
+  wwSlider.addEventListener('input', () => { if (state.activeIndex>=0){ const p=state.files[state.activeIndex].pixel; p.windowWidth = parseFloat(wwSlider.value); wwVal.textContent = Math.round(p.windowWidth); draw(state.files[state.activeIndex],1);} });
+
+  // ---- Reset de Nivel (WL) y Ancho de ventana (WW) ----
+  const wlwwResetBtn = document.getElementById('dv-wlww-reset');
+
+  wlwwResetBtn.addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    const p = f.pixel;
+    if (!p || p.origWindowCenter === undefined) return;
+    p.windowCenter = p.origWindowCenter;
+    p.windowWidth = p.origWindowWidth;
+    wlSlider.value = p.windowCenter;
+    wwSlider.value = p.windowWidth;
+    wlVal.textContent = Math.round(p.windowCenter);
+    wwVal.textContent = Math.round(p.windowWidth);
+    if (typeof updateLiveReadout === 'function') updateLiveReadout(p);
+    draw(f, 1);
+  });
+
+  // ---- Perfiles de contraste: Óseo / Partes blandas, por region+proyeccion ----
+  // Aviso importante: a diferencia de TC (donde WC/WW se define en Unidades
+  // Hounsfield absolutas y "ventana ósea" / "ventana de partes blandas" son
+  // presets estandarizados), en radiografia simple no existe una escala
+  // absoluta equivalente. Estos perfiles son multiplicadores relativos
+  // al WC/WW original que trae el propio DICOM (o el auto-calculado si el
+  // equipo no lo trae), pensados como PUNTO DE PARTIDA: el usuario debe
+  // seguir afinando con los sliders WL/WW segun cada imagen.
+  //
+  // Frontal vs. Lateral necesitan factores DISTINTOS: en lateral hay mucho
+  // mas volumen de tejido que atravesar (todo el diametro antero-posterior
+  // del paciente), por lo que la relacion senal/contraste util para hueso
+  // cambia respecto a la frontal.
+  //
+  // Estado real de calibracion (honesto, no inventar precision que no hay):
+  //   CLS Frontal / Óseo -> calibrado con 1 caso real (ver detalle abajo).
+  //   CLS Lateral / Óseo -> SIN calibrar todavia con un caso real. Se deja
+  //     como el valor conservador que se probo antes de tener el dato de
+  //     Frontal (WW mas angosto), solo como punto de partida provisional.
+  //   Soft (Frontal y Lateral) -> mismo factor generico para ambas, tampoco
+  //     calibrado por separado todavia.
+  const REGION_PROFILES = {
+    CLS: {
+      frontal: {
+        // Calibrado con 2 casos reales (misma region/proyeccion, distinta
+        // exposicion cada vez):
+        //   Caso 1: WL 6853->7827, WW 3197->5999 (ancho orig. ~4567)
+        //           -> centerFactor=1.142, widthFactor=1.313
+        //   Caso 2: WL 6853->8056, WW 4568->5923 (orig. ~6001/~3479, tras
+        //           deshacer el factor del caso 1 que ya estaba aplicado)
+        //           -> centerFactor=1.342, widthFactor=1.702
+        // Los dos casos difieren bastante entre si (~18% en centro, ~30%
+        // en ancho) a pesar de ser la misma region/proyeccion -- prueba de
+        // que el WC/WW que trae cada DICOM ya varia por exposicion/equipo,
+        // y un multiplicador fijo nunca va a calzar perfecto en el 100% de
+        // los casos. Se usa el PROMEDIO de ambos como mejor punto de
+        // partida disponible hasta ahora.
+        bone: { center: 1.242, width: 1.508 },
+        soft: { center: 0.85, width: 1.6 }
+      },
+      lateral: {
+        // Calibrado con 1 caso real: WL 7085->8751, WW 4430->5421 (sobre un
+        // ancho original estimado en 6328, deshaciendo el factor viejo
+        // 1.0/0.7 que estaba de placeholder). A diferencia de frontal, aca
+        // el ancho necesario es MENOR al original (0.857, angostar un
+        // poco), no mayor -- consistente con la logica de que en lateral
+        // hay mas volumen de tejido que atravesar. Con un solo caso, este
+        // valor tiene mas incertidumbre que el de frontal (que ya tiene 2).
+        bone: { center: 1.235, width: 0.857 },
+        soft: { center: 0.85, width: 1.6 }
+      }
+    }
+  };
+
+  // La proyeccion (frontal/lateral) ya no se elige a mano desde un panel:
+  // se toma directo de la deteccion automatica del DICOM (m.isFrontal,
+  // tomado del tag ViewPosition AP/PA) cada vez que se activa una imagen.
+  let currentProjection = 'frontal';
+
+  function setProjection(proj){
+    currentProjection = proj;
+  }
+
+  function syncProjectionFromMeta(f){
+    if (f && f.meta && typeof f.meta.isFrontal === 'boolean') {
+      setProjection(f.meta.isFrontal ? 'frontal' : 'lateral');
+    }
+  }
+
+  function applyWindowProfile(centerFactor, widthFactor){
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    const p = f.pixel;
+    if (!p || p.origWindowCenter === undefined) return;
+    p.windowCenter = p.origWindowCenter * centerFactor;
+    p.windowWidth = Math.max(1, p.origWindowWidth * widthFactor);
+    wlSlider.value = p.windowCenter;
+    wwSlider.value = p.windowWidth;
+    wlVal.textContent = Math.round(p.windowCenter);
+    wwVal.textContent = Math.round(p.windowWidth);
+    if (typeof updateLiveReadout === 'function') updateLiveReadout(p);
+    draw(f, 1);
+  }
+
+  // Revierte WL/WW a los valores ORIGINALES del DICOM (los que traia el
+  // archivo antes de aplicar cualquier perfil Oseo/Soft), usado al apagar
+  // el perfil activo con un segundo clic sobre el mismo boton.
+  function revertToOriginalWindow(){
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    const p = f.pixel;
+    if (!p || p.origWindowCenter === undefined) return;
+    p.windowCenter = p.origWindowCenter;
+    p.windowWidth = p.origWindowWidth;
+    wlSlider.value = p.windowCenter;
+    wwSlider.value = p.windowWidth;
+    wlVal.textContent = Math.round(p.windowCenter);
+    wwVal.textContent = Math.round(p.windowWidth);
+    if (typeof updateLiveReadout === 'function') updateLiveReadout(p);
+    draw(f, 1);
+  }
+
+  function getActiveProfileSet(){
+    const region = REGION_PROFILES.CLS;
+    return region[currentProjection] || region.frontal;
+  }
+
+  // Oseo/Soft funcionan como interruptor: un clic activa el perfil (queda
+  // resaltado), un segundo clic sobre el MISMO boton lo apaga y devuelve
+  // la imagen a su Nivel/Ancho original (no al de fabrica del monitor,
+  // sino al que traia el archivo DICOM antes de tocar nada). Elegir el
+  // otro perfil mientras uno ya esta activo simplemente cambia de uno a
+  // otro (no hace falta apagar primero).
+  let activeWindowProfile = null; // null | 'bone' | 'soft'
+  const boneProfileBtn = document.getElementById('dv-profile-bone');
+  const softProfileBtn = document.getElementById('dv-profile-soft');
+
+  function setActiveWindowProfile(profile){
+    activeWindowProfile = profile;
+    boneProfileBtn.classList.toggle('dv-tool-active', profile === 'bone');
+    softProfileBtn.classList.toggle('dv-tool-active', profile === 'soft');
+  }
+  window.__dvResetWindowProfileState = () => setActiveWindowProfile(null);
+
+  boneProfileBtn.addEventListener('click', () => {
+    if (activeWindowProfile === 'bone') {
+      setActiveWindowProfile(null);
+      revertToOriginalWindow();
+      return;
+    }
+    setActiveWindowProfile('bone');
+    const prof = getActiveProfileSet().bone;
+    applyWindowProfile(prof.center, prof.width);
+  });
+
+  softProfileBtn.addEventListener('click', () => {
+    // WW mas amplio (menor contraste, mas gradacion de grises) y centro
+    // levemente desplazado: ayuda a visualizar psoas, tejido paravertebral
+    // y contornos de baja densidad que quedan "quemados" en el perfil oseo.
+    // Mismo factor para Frontal/Lateral por ahora (no calibrado por
+    // separado todavia -- ver tabla REGION_PROFILES mas arriba).
+    if (activeWindowProfile === 'soft') {
+      setActiveWindowProfile(null);
+      revertToOriginalWindow();
+      return;
+    }
+    setActiveWindowProfile('soft');
+    const prof = getActiveProfileSet().soft;
+    applyWindowProfile(prof.center, prof.width);
+  });
+
+  document.getElementById('dv-rotate-left').addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    f.rotation = ((f.rotation||0) + 90) % 360;
+    draw(f, 1);
+  });
+  document.getElementById('dv-rotate-right').addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    f.rotation = ((f.rotation||0) - 90 + 360) % 360;
+    draw(f, 1);
+  });
+  document.getElementById('dv-flip-h').addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    f.flipH = !f.flipH;
+    draw(f, 1);
+  });
+  document.getElementById('dv-flip-v').addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    f.flipV = !f.flipV;
+    draw(f, 1);
+  });
+  document.getElementById('dv-rotate-180').addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    f.rotation = ((f.rotation||0) + 180) % 360;
+    draw(f, 1);
+  });
+  document.getElementById('dv-clear-transforms').addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    f.rotation = 0; f.flipH = false; f.flipV = false;
+    draw(f, 1);
+  });
+  const invertBtn = document.getElementById('dv-invert');
+  invertBtn.addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    f.invert = !f.invert;
+    invertBtn.classList.toggle('dv-tool-active', f.invert);
+    draw(f, 1);
+  });
+
+  // ---- Zoom: el tamaño de ajuste ("100%") se CALCULA matematicamente segun
+  // el tamaño real del contenedor y la resolucion nativa de la imagen — no se
+  // mide del DOM (eso daba resultados inconsistentes con canvas). El zoom
+  // escala ese tamaño calculado, siempre con las mismas proporciones.
+  const viewerWrap = document.getElementById('dv-viewer-wrap');
+  let zoomLevel = 1;
+
+  // ---- Modo interactivo (zoom con rueda) + ventaneo con clic sostenido ----
+  // Antes la rueda del mouse siempre hacia zoom apenas se pasaba por encima
+  // de la imagen, lo cual era facil de disparar sin querer. Ahora hace falta
+  // un CLIC IZQUIERDO (sin arrastrar, sin herramienta activa) sobre la
+  // imagen para "armar" el modo interactivo: recien ahi la rueda hace zoom.
+  // Otro clic (sin arrastrar) lo apaga; otro lo vuelve a encender.
+  //
+  // El ventaneo (Nivel/Ancho) con zoom aplicado es un gesto APARTE, clasico:
+  // presionar el clic izquierdo Y MANTENERLO mientras se arrastra. Un clic
+  // SIN arrastre siempre es el interruptor de arriba; un clic CON arrastre
+  // (mientras hay zoom) siempre ventanea, sin apagar/encender el modo
+  // interactivo. Antes se ventaneaba con solo mover el mouse (sin sostener
+  // el clic) una vez "armado", pero eso se activaba solo con tener el boton
+  // presionado en cualquier momento despues del zoom, sin un clic fresco --
+  // ahora requiere presionar y arrastrar cada vez.
+  let interactionActive = false;
+  let pendingToggleStart = null; // {x,y} del mousedown, para distinguir clic de arrastre
+  let leftWindowDrag = null; // ventaneo con clic izquierdo sostenido (solo con zoom aplicado)
+
+  const interactionIndicator = document.createElement('div');
+  interactionIndicator.id = 'dv-interaction-indicator';
+  interactionIndicator.style.cssText = 'position:absolute;top:8px;right:8px;z-index:25;color:var(--accent);font-family:"IBM Plex Mono",monospace;font-size:10.5px;pointer-events:none;display:none;background:rgba(0,0,0,.45);padding:2px 6px;border-radius:3px;';
+  interactionIndicator.textContent = '🖱 Zoom/Ventaneo activo';
+  viewerWrap.appendChild(interactionIndicator);
+
+  function setInteractionActive(on){
+    interactionActive = on;
+    interactionIndicator.style.display = on ? 'block' : 'none';
+  }
+
+  // Indicador flotante de zoom (reemplaza el texto que estaba en el panel de
+  // Herramientas, ya innecesario porque el zoom ahora se controla 100% con
+  // la rueda del mouse). Solo se muestra cuando el zoom no esta al 100%.
+  const zoomIndicator = document.createElement('div');
+  zoomIndicator.id = 'dv-zoom-indicator';
+  zoomIndicator.style.cssText = 'position:absolute;top:8px;left:8px;z-index:25;color:var(--accent);font-family:"IBM Plex Mono",monospace;font-size:11px;pointer-events:none;display:none;background:rgba(0,0,0,.45);padding:2px 6px;border-radius:3px;';
+  viewerWrap.appendChild(zoomIndicator);
+
+  function fitCanvasToContainer(){
+    const containerW = viewerWrap.clientWidth;
+    const containerH = viewerWrap.clientHeight;
+    const nativeW = canvas.width, nativeH = canvas.height;
+    if (!containerW || !containerH || !nativeW || !nativeH) return;
+    const fitScale = Math.min(containerW/nativeW, containerH/nativeH);
+    const baseW = nativeW*fitScale, baseH = nativeH*fitScale;
+    canvas.style.width = (baseW*zoomLevel) + 'px';
+    canvas.style.height = (baseH*zoomLevel) + 'px';
+  }
+  window.fitCanvasToContainer = fitCanvasToContainer;
+
+  function applyZoom(){
+    zoomIndicator.textContent = Math.round(zoomLevel*100) + '%';
+    zoomIndicator.style.display = zoomLevel !== 1 ? 'block' : 'none';
+    viewerWrap.classList.toggle('dv-zoomed', zoomLevel !== 1);
+    fitCanvasToContainer();
+  }
+
+  // Banner de aviso de privacidad: colapsado por defecto (una sola linea)
+  // para dar mas espacio vertical a la imagen; se expande con un clic sin
+  // perder el texto completo de la advertencia.
+  document.getElementById('dv-warn-toggle').addEventListener('click', function(){
+    this.classList.toggle('dv-warn-expanded');
+    const chevron = this.querySelector('.dv-warn-chevron');
+    if (chevron) chevron.textContent = this.classList.contains('dv-warn-expanded') ? '▴' : '▾';
+  });
+
+  // Zoom con la rueda del mouse, ANCLADO al punto donde esta el cursor (no
+  // fijo en una esquina): se ajusta el scroll del contenedor para que el
+  // punto de la imagen que esta bajo el cursor se mantenga en el mismo
+  // lugar de la pantalla mientras se acerca/aleja, igual que Photoshop/Figma.
+  // Minimo de zoom: 100% (1:1, tamano normal de presentacion) -- antes
+  // llegaba a 25%, dejando la imagen demasiado chica para distinguir nada
+  // dentro del recuadro negro.
+  // Zoom con la rueda del mouse, ANCLADO al punto donde esta el cursor (no
+  // fijo en una esquina): se ajusta el scroll del contenedor para que el
+  // punto de la imagen que esta bajo el cursor se mantenga en el mismo
+  // lugar de la pantalla mientras se acerca/aleja, igual que Photoshop/Figma.
+  // Minimo de zoom: 100% (1:1, tamano normal de presentacion) -- antes
+  // llegaba a 25%, dejando la imagen demasiado chica para distinguir nada
+  // dentro del recuadro negro.
+  //
+  // Los eventos "wheel" de un mismo gesto de rueda pueden llegar varias
+  // veces por frame (rueda rapida / trackpad). Antes cada uno procesaba su
+  // zoom+scroll de forma sincronica e inmediata, lo que forzaba varias
+  // lecturas/escrituras de layout (getBoundingClientRect, clientWidth) en
+  // rafaga dentro del mismo frame -- el navegador terminaba mostrando
+  // valores intermedios/desincronizados y la imagen "tambaleaba" un
+  // instante antes de asentarse. Ahora se acumulan los deltas y se aplica
+  // UN solo zoom+scroll por frame (requestAnimationFrame), leyendo/
+  // escribiendo el layout una sola vez.
+  let wheelZoomAccum = 0;
+  let wheelCursorPoint = null;
+  let wheelRAFScheduled = false;
+  viewerWrap.addEventListener('wheel', (e) => {
+    if (state.activeIndex < 0) return;
+    if (!interactionActive) return; // requiere clic izquierdo antes para "armar" el zoom
+    e.preventDefault();
+    const dir = e.deltaY < 0 ? 1 : -1; // rueda hacia arriba = acercar
+    wheelZoomAccum += dir * 0.1;
+    wheelCursorPoint = { x: e.clientX, y: e.clientY };
+    if (wheelRAFScheduled) return;
+    wheelRAFScheduled = true;
+    requestAnimationFrame(() => {
+      wheelRAFScheduled = false;
+      if (!wheelCursorPoint || state.activeIndex < 0) { wheelZoomAccum = 0; return; }
+      const oldZoom = zoomLevel;
+      const newZoom = Math.max(1, Math.min(6, +(zoomLevel + wheelZoomAccum).toFixed(2)));
+      wheelZoomAccum = 0;
+      if (newZoom === oldZoom) return;
+      // Punto bajo el cursor, en coordenadas de contenido (independiente del
+      // scroll actual), ANTES de cambiar el zoom:
+      const rect = viewerWrap.getBoundingClientRect();
+      const cursorX = wheelCursorPoint.x - rect.left, cursorY = wheelCursorPoint.y - rect.top;
+      const contentX = viewerWrap.scrollLeft + cursorX;
+      const contentY = viewerWrap.scrollTop + cursorY;
+      const ratio = newZoom / oldZoom;
+      zoomLevel = newZoom;
+      applyZoom();
+      // Reescala ese punto segun el nuevo zoom y ajusta el scroll para que
+      // quede otra vez exactamente bajo el cursor.
+      viewerWrap.scrollLeft = contentX*ratio - cursorX;
+      viewerWrap.scrollTop = contentY*ratio - cursorY;
+    });
+  }, { passive: false });
+
+
+  // Clic derecho SOSTENIDO + arrastre:
+  //  - Si HAY zoom aplicado (>100%): navega/hace pan por la imagen (como ya
+  //    funcionaba).
+  //  - Si NO hay zoom (100%, vista ajustada): en vez de pan (que no tiene
+  //    sentido sin zoom, no hay nada que recorrer), ajusta Nivel/Ancho de
+  //    ventana directamente sobre la imagen: movimiento horizontal = Ancho
+  //    (WW), movimiento vertical = Nivel (WL). Reemplaza el uso tactil de los
+  //    sliders laterales (que quedan ocultos, pero siguen funcionando via
+  //    JS por si se quieren reactivar).
+  // Clic derecho RAPIDO (sin arrastre) = sigue borrando la anotacion bajo el
+  // cursor, como ya funcionaba antes.
+  let rightDrag = null; // pan cuando hay zoom: { startX, startY, startScrollLeft, startScrollTop, moved }
+  let windowDrag = null; // ajuste WL/WW cuando no hay zoom: { startX, startY, startCenter, startWidth, moved }
+
+  const wlwwLiveReadout = document.createElement('div');
+  wlwwLiveReadout.id = 'dv-wlww-live';
+  wlwwLiveReadout.style.cssText = 'position:absolute;left:8px;bottom:8px;z-index:25;color:var(--accent);font-family:"IBM Plex Mono",monospace;font-size:11px;pointer-events:none;display:none;line-height:1.5;';
+  viewerWrap.appendChild(wlwwLiveReadout);
+
+  function updateLiveReadout(p){
+    wlwwLiveReadout.innerHTML =
+      '<div>WL: ' + Math.round(p.windowCenter) + '</div>' +
+      '<div>WW: ' + Math.round(p.windowWidth) + '</div>';
+    wlwwLiveReadout.style.display = 'block';
+  }
+
+  viewerWrap.addEventListener('mousedown', (e) => {
+    if (e.button !== 2) return;
+    e.preventDefault();
+    // WL/WW por clic derecho sostenido: siempre disponible sin zoom (100%).
+    // Con zoom activo, el clic derecho normal sigue haciendo PAN (util para
+    // navegar la imagen ampliada) -- pero si se mantiene Alt presionado,
+    // el clic derecho ajusta WL/WW en vez de hacer pan, aunque haya zoom.
+    // (Se usa Alt y no Shift: Shift+clic-derecho fuerza el menu contextual
+    // NATIVO del navegador en varios navegadores -Firefox en particular-
+    // ignorando el preventDefault() de la pagina, lo cual rompia el gesto.)
+    const wantsWindowing = (zoomLevel === 1 || e.altKey);
+    if (wantsWindowing && state.activeIndex >= 0 && state.files[state.activeIndex].pixel) {
+      const f = state.files[state.activeIndex];
+      windowDrag = {
+        startX: e.clientX, startY: e.clientY,
+        startCenter: f.pixel.windowCenter, startWidth: f.pixel.windowWidth,
+        moved: false
+      };
+      updateLiveReadout(f.pixel);
+      return;
+    }
+    rightDrag = {
+      startX: e.clientX, startY: e.clientY,
+      startScrollLeft: viewerWrap.scrollLeft, startScrollTop: viewerWrap.scrollTop,
+      moved: false
+    };
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (windowDrag) {
+      const dx = e.clientX - windowDrag.startX, dy = e.clientY - windowDrag.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) windowDrag.moved = true;
+      if (windowDrag.moved && state.activeIndex >= 0) {
+        const f = state.files[state.activeIndex];
+        const p = f.pixel;
+        if (p) {
+          // sensibilidad proporcional al ancho original de la imagen, para
+          // que el gesto se sienta parecido sin importar la escala de datos
+          const sensitivity = Math.max(p.origWindowWidth || p.windowWidth, 10) / 300;
+          p.windowWidth = Math.max(1, windowDrag.startWidth + dx * sensitivity);
+          p.windowCenter = windowDrag.startCenter - dy * sensitivity;
+          wlSlider.value = Math.round(p.windowCenter);
+          wwSlider.value = Math.round(p.windowWidth);
+          wlVal.textContent = Math.round(p.windowCenter);
+          wwVal.textContent = Math.round(p.windowWidth);
+          updateLiveReadout(p);
+          draw(f, 1, true);
+        }
+      }
+      return;
+    }
+    if (!rightDrag) return;
+    const dx = e.clientX - rightDrag.startX, dy = e.clientY - rightDrag.startY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) rightDrag.moved = true;
+    if (rightDrag.moved) {
+      viewerWrap.scrollLeft = rightDrag.startScrollLeft - dx;
+      viewerWrap.scrollTop = rightDrag.startScrollTop - dy;
+    }
+  });
+  window.addEventListener('mouseup', (e) => {
+    if (e.button !== 2) return;
+    if (windowDrag) {
+      if (windowDrag.moved) suppressNextContextDelete = true;
+      windowDrag = null;
+    }
+    if (rightDrag) {
+      if (rightDrag.moved) suppressNextContextDelete = true;
+      rightDrag = null;
+    }
+  });
+  let suppressNextContextDelete = false;
+
+  // ---- Soporte tactil (iPad/touch) ----------------------------------------
+  // Traduce gestos de dedo a los mismos eventos de mouse que ya maneja el
+  // codigo de arriba, para no duplicar logica ni romper el mouse/trackpad
+  // (que en iPad con Magic Keyboard/trackpad ya funciona nativo como mouse):
+  //   1 dedo  -> equivalente a clic IZQUIERDO (dibujar, mover anotaciones)
+  //   2 dedos -> equivalente a clic DERECHO (pan / ajustar brillo-contraste;
+  //              toque rapido de 2 dedos sin arrastre = borrar anotacion)
+  //
+  // PELLIZCO (pinch) con 2 dedos = zoom, usando el mismo zoomLevel/applyZoom
+  // de los botones +/-/1:1. Con 2 dedos hay ambiguedad al inicio (¿el usuario
+  // quiere pan/windowing o pellizcar para hacer zoom?), asi que se decide en
+  // caliente: si la DISTANCIA entre los 2 dedos cambia mas que el movimiento
+  // del punto medio, se interpreta como pellizco (se cancela el pan/windowing
+  // que se habia iniciado); si no, sigue siendo pan/windowing como antes.
+  (function initTouchSupport(){
+    let touchButton = null; // 0 = un dedo, 2 = dos dedos, null = sin toque activo
+    let lastPoint = null;
+    let moved = false;
+
+    let pinchMode = false;      // true una vez que se decide que es pellizco
+    let pinchStartDist = null;  // distancia inicial entre los 2 dedos
+    let pinchStartZoom = null;  // zoomLevel al iniciar el pellizco
+
+    function midpoint(touches){
+      if (touches.length === 1) return { x: touches[0].clientX, y: touches[0].clientY };
+      return {
+        x: (touches[0].clientX + touches[1].clientX) / 2,
+        y: (touches[0].clientY + touches[1].clientY) / 2
+      };
+    }
+
+    function distance(touches){
+      if (touches.length < 2) return 0;
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.sqrt(dx*dx + dy*dy);
+    }
+
+    function fireMouse(type, point, button){
+      canvas.dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true, view: window,
+        clientX: point.x, clientY: point.y,
+        button: button, buttons: button === 2 ? 2 : 1
+      }));
+    }
+
+    // cancela un drag de pan/windowing que ya se habia iniciado (le manda un
+    // mouseup) para pasar limpiamente al modo pellizco
+    function cancelMouseDrag(){
+      if (touchButton !== null) fireMouse('mouseup', lastPoint, touchButton);
+    }
+
+    viewerWrap.addEventListener('touchstart', (e) => {
+      if (e.touches.length < 1 || e.touches.length > 2) return;
+      e.preventDefault();
+      moved = false;
+      pinchMode = false;
+      lastPoint = midpoint(e.touches);
+      if (e.touches.length === 2) {
+        pinchStartDist = distance(e.touches);
+        pinchStartZoom = zoomLevel;
+      }
+      touchButton = e.touches.length === 2 ? 2 : 0;
+      fireMouse('mousedown', lastPoint, touchButton);
+    }, { passive: false });
+
+    viewerWrap.addEventListener('touchmove', (e) => {
+      if (touchButton === null) return;
+      e.preventDefault();
+
+      if (e.touches.length === 2 && !pinchMode) {
+        const dist = distance(e.touches);
+        const distChange = Math.abs(dist - pinchStartDist);
+        const p = midpoint(e.touches);
+        const panChange = Math.max(Math.abs(p.x - lastPoint.x), Math.abs(p.y - lastPoint.y));
+        // si los dedos se separan/juntan claramente mas de lo que se mueve
+        // el punto medio, es un pellizco, no un pan/windowing
+        if (distChange > 10 && distChange > panChange) {
+          pinchMode = true;
+          cancelMouseDrag(); // cierra limpiamente el drag de mouse simulado
+        }
+      }
+
+      if (pinchMode) {
+        const dist = distance(e.touches.length === 2 ? e.touches : [e.touches[0], e.touches[0]]);
+        if (dist > 0 && pinchStartDist) {
+          const scale = dist / pinchStartDist;
+          zoomLevel = Math.max(1, Math.min(6, +(pinchStartZoom * scale).toFixed(2)));
+          applyZoom();
+        }
+        lastPoint = midpoint(e.touches);
+        return;
+      }
+
+      const p = midpoint(e.touches.length ? e.touches : [{ clientX: lastPoint.x, clientY: lastPoint.y }]);
+      if (Math.abs(p.x - lastPoint.x) > 2 || Math.abs(p.y - lastPoint.y) > 2) moved = true;
+      lastPoint = p;
+      fireMouse('mousemove', p, touchButton);
+    }, { passive: false });
+
+    function endTouch(e){
+      if (touchButton === null) return;
+      e.preventDefault();
+      if (!pinchMode) {
+        fireMouse('mouseup', lastPoint, touchButton);
+        if (touchButton === 2 && !moved) {
+          // toque rapido de 2 dedos = equivalente a clic derecho rapido: borra
+          // la anotacion bajo el punto (mismo comportamiento que ya existe)
+          canvas.dispatchEvent(new MouseEvent('contextmenu', {
+            bubbles: true, cancelable: true, view: window,
+            clientX: lastPoint.x, clientY: lastPoint.y
+          }));
+        }
+      }
+      touchButton = null;
+      lastPoint = null;
+      moved = false;
+      pinchMode = false;
+      pinchStartDist = null;
+      pinchStartZoom = null;
+    }
+    viewerWrap.addEventListener('touchend', endTouch, { passive: false });
+    viewerWrap.addEventListener('touchcancel', endTouch, { passive: false });
+  })();
+
+  // ---- Herramientas de anotacion: flecha y texto (con opcion de enmarcado) ----
+  let currentTool = 'none'; // 'none' | 'arrow' | 'text' | 'length' | 'angle' | 'cobb'
+  let dragStart = null;
+  const arrowBtn = document.getElementById('dv-tool-arrow');
+  const textBtn = document.getElementById('dv-tool-text');
+  const lengthBtn = document.getElementById('dv-tool-length');
+  const angleBtn = document.getElementById('dv-tool-angle');
+  const cobbBtn = document.getElementById('dv-tool-cobb');
+  // Puntos acumulados para herramientas de clic multiple (Angulo=3, Cobb=4).
+  // Se reinicia al cambiar de herramienta o al completar una medicion.
+  let pendingPoints = [];
+
+  function setTool(tool){
+    currentTool = (currentTool === tool) ? 'none' : tool;
+    pendingPoints = [];
+    arrowBtn.classList.toggle('dv-tool-active', currentTool === 'arrow');
+    textBtn.classList.toggle('dv-tool-active', currentTool === 'text');
+    lengthBtn.classList.toggle('dv-tool-active', currentTool === 'length');
+    angleBtn.classList.toggle('dv-tool-active', currentTool === 'angle');
+    cobbBtn.classList.toggle('dv-tool-active', currentTool === 'cobb');
+    activeMarker = null;
+    markerBtns.forEach(b => b.classList.remove('dv-tool-active'));
+    canvas.style.cursor = currentTool === 'none' ? 'default' : 'crosshair';
+  }
+  arrowBtn.addEventListener('click', () => setTool('arrow'));
+  textBtn.addEventListener('click', () => setTool('text'));
+  lengthBtn.addEventListener('click', () => setTool('length'));
+  angleBtn.addEventListener('click', () => setTool('angle'));
+  cobbBtn.addEventListener('click', () => setTool('cobb'));
+
+  // Escape cancela una medicion de Angulo/Cobb a medio hacer (puntos ya
+  // clickeados pero sin completar), sin necesidad de recargar la imagen.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && pendingPoints.length) {
+      pendingPoints = [];
+      if (state.activeIndex >= 0) draw(state.files[state.activeIndex], 1);
+    }
+  });
+
+  // ---- Navegar entre imagenes cargadas con las flechas ↑ / ↓ del teclado ----
+  // ↓ pasa a la siguiente imagen de la lista, ↑ a la anterior. Se detiene en
+  // los extremos (no da la vuelta): en la ultima imagen, ↓ no hace nada; en
+  // la primera, ↑ no hace nada. Salta las imagenes que no cargaron bien
+  // (status distinto de 'ok'), ya que esas no se pueden mostrar. Se
+  // desactiva mientras se esta escribiendo en un campo de texto (por
+  // ejemplo, una anotacion o el buscador), para no interferir con eso.
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target && e.target.isContentEditable)) return;
+    if (!state.files.length) return;
+    const okIndexes = state.files.map((f, i) => f.status === 'ok' ? i : null).filter(i => i !== null);
+    if (!okIndexes.length) return;
+    e.preventDefault();
+    const posInOk = okIndexes.indexOf(state.activeIndex);
+    let targetPos;
+    if (e.key === 'ArrowDown') {
+      targetPos = posInOk === -1 ? 0 : Math.min(posInOk + 1, okIndexes.length - 1);
+    } else {
+      targetPos = posInOk === -1 ? 0 : Math.max(posInOk - 1, 0);
+    }
+    const targetIndex = okIndexes[targetPos];
+    if (targetIndex !== state.activeIndex) selectFile(targetIndex);
+  });
+
+  // ---- Marcadores rapidos R / L / LD / LI (mayusculas, negrita, trazo grueso) ----
+  let activeMarker = null;
+  const markerBtns = document.querySelectorAll('.dv-marker-btn');
+  markerBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const marker = btn.dataset.marker;
+      if (activeMarker === marker) {
+        activeMarker = null;
+        currentTool = 'none';
+      } else {
+        activeMarker = marker;
+        currentTool = 'marker';
+      }
+      arrowBtn.classList.remove('dv-tool-active');
+      textBtn.classList.remove('dv-tool-active');
+      markerBtns.forEach(b => b.classList.toggle('dv-tool-active', b.dataset.marker === activeMarker));
+      canvas.style.cursor = currentTool === 'none' ? 'default' : 'crosshair';
+    });
+  });
+
+  function canvasFraction(e){
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+    const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+    return { fx: x / canvas.width, fy: y / canvas.height };
+  }
+
+  const FIXED_FONT = "'IBM Plex Mono', monospace";
+  let boldActive = false;
+  let currentTextColor = '#3FD0C0'; // celeste por defecto
+  let currentFontFamily = 'Arial, sans-serif';
+  let currentFontStyle = 'normal'; // 'normal' | 'italic' (para "Cursiva")
+  const boldBtn = document.getElementById('dv-text-bold-btn');
+  boldBtn.addEventListener('click', () => {
+    boldActive = !boldActive;
+    boldBtn.classList.toggle('dv-tool-active', boldActive);
+  });
+  const colorBtn = document.getElementById('dv-color-btn');
+  const colorArrowBtn = document.getElementById('dv-color-arrow-btn');
+  const colorDropdown = document.getElementById('dv-color-dropdown');
+  const colorSwatch = document.getElementById('dv-color-swatch');
+  function toggleColorDropdown(e){
+    e.stopPropagation();
+    colorDropdown.classList.toggle('open');
+  }
+  colorBtn.addEventListener('click', toggleColorDropdown);
+  colorArrowBtn.addEventListener('click', toggleColorDropdown);
+  document.querySelectorAll('.dv-color-swatch').forEach(sw => {
+    sw.addEventListener('click', (e) => {
+      e.stopPropagation();
+      currentTextColor = sw.dataset.color;
+      colorSwatch.style.background = currentTextColor;
+      colorDropdown.classList.remove('open');
+    });
+  });
+  document.addEventListener('click', () => colorDropdown.classList.remove('open'));
+
+  // ---- Tipo de letra (Cursiva / Arial / Calibri) -- Arial por defecto ----
+  const fontOpener = document.getElementById('dv-font-opener');
+  const fontDropdown = document.getElementById('dv-font-dropdown');
+  fontOpener.addEventListener('click', (e) => {
+    e.stopPropagation();
+    fontDropdown.classList.toggle('open');
+  });
+  document.querySelectorAll('.dv-font-option').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      currentFontStyle = btn.dataset.font;
+      currentFontFamily = btn.dataset.family;
+      document.querySelectorAll('.dv-font-option').forEach(b => b.classList.remove('dv-tool-active'));
+      btn.classList.add('dv-tool-active');
+      fontDropdown.classList.remove('open');
+    });
+  });
+  document.addEventListener('click', () => fontDropdown.classList.remove('open'));
+
+  // ---- Desplegables estilo RadiAnt (icono + flechita que abre un panel) ----
+  // Patron generico reutilizable: cualquier boton "opener" + su panel de
+  // opciones. Clic fuera cierra; clic en una opcion tambien cierra.
+  function setupFlyout(openerId, dropdownId){
+    const opener = document.getElementById(openerId);
+    const dropdown = document.getElementById(dropdownId);
+    if (!opener || !dropdown) return;
+    opener.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = !dropdown.classList.contains('open');
+      document.querySelectorAll('.dv-flyout-dropdown.open').forEach(d => d.classList.remove('open'));
+      if (willOpen) dropdown.classList.add('open');
+    });
+    dropdown.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => dropdown.classList.remove('open'));
+    });
+    document.addEventListener('click', () => dropdown.classList.remove('open'));
+  }
+  setupFlyout('dv-transform-opener', 'dv-transform-dropdown');
+  setupFlyout('dv-view-opener', 'dv-view-dropdown');
+  setupFlyout('dv-export-opener', 'dv-export-dropdown');
+  setupFlyout('dv-export-all-opener', 'dv-export-all-dropdown');
+
+  // ---- Toggles de visibilidad (grupo "Ver") ----
+  // Flags globales (window.*) para evitar el mismo bug de scope entre
+  // bloques <script> que ya nos mordio antes hoy (ej. activeAspectRatio).
+  window.dvShowPatientOverlay = true;
+  window.dvShowAnnotations = true;
+  const patientDataBtn = document.getElementById('dv-toggle-patient-data');
+  const dicomOverlayBtn = document.getElementById('dv-toggle-dicom-overlay');
+  const measurementsBtn = document.getElementById('dv-toggle-measurements');
+  function redrawActive(){
+    if (state.activeIndex >= 0) draw(state.files[state.activeIndex], 1);
+  }
+  patientDataBtn.addEventListener('click', () => {
+    window.dvShowPatientOverlay = !window.dvShowPatientOverlay;
+    patientDataBtn.textContent = window.dvShowPatientOverlay ? '👤 Ocultar datos del paciente' : '👤 Mostrar datos del paciente';
+    redrawActive();
+  });
+  // Nota honesta: en esta herramienta no existe (todavia) un overlay tecnico
+  // DICOM separado del bloque de datos del paciente (WL/WW se muestra en el
+  // panel lateral, no quemado en el canvas) -- asi que por ahora este boton
+  // controla lo MISMO que "Ocultar datos del paciente". Se deja como boton
+  // aparte, igual que en RadiAnt, para el dia que se agregue un overlay
+  // tecnico propio (ej. marcadores de proyeccion quemados en la imagen).
+  dicomOverlayBtn.addEventListener('click', () => {
+    window.dvShowPatientOverlay = !window.dvShowPatientOverlay;
+    patientDataBtn.textContent = window.dvShowPatientOverlay ? '👤 Ocultar datos del paciente' : '👤 Mostrar datos del paciente';
+    dicomOverlayBtn.textContent = window.dvShowPatientOverlay ? '🖥 Ocultar overlay DICOM' : '🖥 Mostrar overlay DICOM';
+    redrawActive();
+  });
+  measurementsBtn.addEventListener('click', () => {
+    window.dvShowAnnotations = !window.dvShowAnnotations;
+    measurementsBtn.textContent = window.dvShowAnnotations ? '📏 Ocultar mediciones' : '📏 Mostrar mediciones';
+    redrawActive();
+  });
+
+  // ---- Mostrar tags DICOM crudos (equivalente a "Show DICOM tags" de RadiAnt) ----
+  document.getElementById('dv-show-tags').addEventListener('click', () => {
+    if (state.activeIndex < 0) { alert('Primero carga una imagen.'); return; }
+    const f = state.files[state.activeIndex];
+    if (!f.dataSet || !f.dataSet.elements) { alert('No hay datos DICOM crudos disponibles para esta imagen.'); return; }
+    let existing = document.getElementById('dv-tags-modal');
+    if (existing) existing.remove();
+    const modal = document.createElement('div');
+    modal.id = 'dv-tags-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--panel);border:1px solid var(--border);border-radius:8px;max-width:800px;max-height:80vh;width:90%;display:flex;flex-direction:column;';
+    const header = document.createElement('div');
+    header.style.cssText = 'padding:12px 16px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;';
+    header.innerHTML = '<b style="color:var(--text);font-family:\'IBM Plex Sans\',sans-serif;">Tags DICOM crudos</b>';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'dv-btn secondary';
+    closeBtn.textContent = 'Cerrar';
+    closeBtn.addEventListener('click', () => modal.remove());
+    header.appendChild(closeBtn);
+    const body = document.createElement('div');
+    body.style.cssText = 'overflow:auto;padding:10px 16px;font-family:\'IBM Plex Mono\',monospace;font-size:11.5px;color:var(--text-muted);';
+    const rows = [];
+    Object.keys(f.dataSet.elements).sort().forEach(tag => {
+      if (tag === 'x7fe00010') return; // PixelData: enorme e ilegible, se omite
+      let val = '';
+      try { val = f.dataSet.string(tag) || ''; } catch(err) { val = '(binario)'; }
+      if (val.length > 120) val = val.slice(0,120) + '…';
+      rows.push('<tr><td style="padding:2px 10px 2px 0;color:var(--accent);white-space:nowrap;">' + tag + '</td><td style="padding:2px 0;">' + (val || '').replace(/</g,'&lt;') + '</td></tr>');
+    });
+    body.innerHTML = '<table style="border-collapse:collapse;width:100%;">' + rows.join('') + '</table>';
+    box.appendChild(header);
+    box.appendChild(body);
+    modal.appendChild(box);
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+  });
+
+  let activeTextCommit = null; // commit() del input de texto abierto actualmente, si hay uno
+
+  function openTextInput(e, fx, fy, editingAnn){
+    // Si ya habia un input de texto abierto (p.ej. el usuario no llego a
+    // hacer clic en la imagen para confirmarlo), se confirma primero para
+    // no perder lo que habia escrito.
+    if (activeTextCommit) {
+      const prevCommit = activeTextCommit;
+      activeTextCommit = null;
+      prevCommit();
+    }
+    const prevInput = document.getElementById('dv-text-input');
+    if (prevInput) prevInput.remove();
+
+    const wrapRect = viewerWrap.getBoundingClientRect();
+    const left = e.clientX - wrapRect.left;
+    const top = e.clientY - wrapRect.top;
+
+    // Si se esta editando un texto existente, precarga sus valores en los
+    // controles de la barra (color y negrita) y en el campo.
+    if (editingAnn) {
+      currentTextColor = editingAnn.color || '#3FD0C0';
+      colorSwatch.style.background = currentTextColor;
+      boldActive = !!editingAnn.bold;
+      boldBtn.classList.toggle('dv-tool-active', boldActive);
+      currentFontFamily = editingAnn.fontFamily || 'Arial, sans-serif';
+      currentFontStyle = editingAnn.italic ? 'italic' : 'normal';
+      document.querySelectorAll('.dv-font-option').forEach(b => {
+        b.classList.toggle('dv-tool-active', b.dataset.font === currentFontStyle && b.dataset.family === currentFontFamily);
+      });
+    }
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.id = 'dv-text-input';
+    input.placeholder = 'Escribe aquí…';
+    input.value = editingAnn ? editingAnn.text : '';
+    input.style.left = left + 'px';
+    input.style.top = top + 'px';
+    input.style.color = currentTextColor;
+    viewerWrap.appendChild(input);
+
+    // Ya no hay boton "OK": el texto se confirma con un clic en cualquier
+    // parte de la imagen (ver el listener en modo "captura" sobre
+    // viewerWrap, mas abajo), o presionando Enter. Escape cancela.
+    let committed = false;
+    const commit = () => {
+      if (committed) return;
+      committed = true;
+      activeTextCommit = null;
+      const text = input.value.trim();
+      if (text && state.activeIndex >= 0) {
+        const f = state.files[state.activeIndex];
+        f.annotations = f.annotations || [];
+        pushUndo(f);
+        const props = {
+          framed: false,
+          bold: boldActive,
+          fontFamily: currentFontFamily,
+          italic: currentFontStyle === 'italic',
+          color: currentTextColor
+        };
+        if (editingAnn) {
+          Object.assign(editingAnn, props, { text });
+          delete editingAnn._editing;
+        } else {
+          f.annotations.push(Object.assign({ type: 'text', x: fx, y: fy }, props, { text }));
+        }
+        draw(f, 1);
+      } else if (!text && editingAnn && state.activeIndex >= 0) {
+        // si borraste todo el texto al editar, se elimina la anotacion
+        const f = state.files[state.activeIndex];
+        pushUndo(f);
+        const idx = f.annotations.indexOf(editingAnn);
+        if (idx >= 0) { f.annotations.splice(idx,1); draw(f,1); }
+      }
+      // La herramienta de texto se apaga sola despues de confirmar: antes
+      // se quedaba "armada" y el siguiente clic en la imagen (aunque fuera
+      // solo para cerrar el cuadro anterior) abria un cuadro nuevo sin
+      // querer. Ahora hace falta volver a tocar el icono "T" para el
+      // siguiente texto, como se pidio.
+      if (currentTool === 'text') {
+        currentTool = 'none';
+        textBtn.classList.remove('dv-tool-active');
+        canvas.style.cursor = 'default';
+      }
+      input.remove();
+    };
+    activeTextCommit = commit;
+    input.addEventListener('keydown', (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') commit();
+      if (ev.key === 'Escape') {
+        committed = true;
+        activeTextCommit = null;
+        if (editingAnn) { delete editingAnn._editing; draw(state.files[state.activeIndex], 1); }
+        if (currentTool === 'text') {
+          currentTool = 'none';
+          textBtn.classList.remove('dv-tool-active');
+          canvas.style.cursor = 'default';
+        }
+        input.remove();
+      }
+    });
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+  }
+
+  // Confirma el texto en edicion con un clic en CUALQUIER parte de la
+  // imagen (ya no hace falta un boton "OK"). Se usa fase de captura para
+  // que esto se resuelva ANTES que el propio mousedown del canvas -- y se
+  // detiene la propagacion del evento (stopPropagation) para que ese MISMO
+  // clic no dispare TAMBIEN la accion normal del canvas (abrir un texto
+  // nuevo si la herramienta de texto seguia activa, o colocar otro
+  // marcador D/I/LD/LI si esa herramienta seguia activa: eran exactamente
+  // los dos bugs reportados -- un texto nuevo se abria solo, o una letra
+  // se duplicaba, en el mismo clic que se uso para cerrar/confirmar).
+  viewerWrap.addEventListener('mousedown', (e) => {
+    if (activeTextCommit && e.target.id !== 'dv-text-input') {
+      e.stopPropagation();
+      const commitFn = activeTextCommit;
+      activeTextCommit = null;
+      commitFn();
+    }
+  }, true);
+
+  // ---- Deshacer / Rehacer (hasta 10 pasos cada uno) ----
+  // Antes de CUALQUIER cambio en las anotaciones (crear, borrar, editar, mover)
+  // se guarda una copia del estado anterior. Al hacer algo nuevo (no al deshacer/
+  // rehacer) se limpia el historial de "rehacer", como es estandar.
+  function pushUndo(f){
+    f.undoStack = f.undoStack || [];
+    f.undoStack.push(JSON.parse(JSON.stringify(f.annotations || [])));
+    if (f.undoStack.length > 10) f.undoStack.shift();
+    f.redoStack = [];
+  }
+  document.getElementById('dv-undo').addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    if (!f.undoStack || !f.undoStack.length) return;
+    f.redoStack = f.redoStack || [];
+    f.redoStack.push(JSON.parse(JSON.stringify(f.annotations || [])));
+    if (f.redoStack.length > 10) f.redoStack.shift();
+    f.annotations = f.undoStack.pop();
+    draw(f, 1);
+  });
+  document.getElementById('dv-redo').addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    if (!f.redoStack || !f.redoStack.length) return;
+    f.undoStack = f.undoStack || [];
+    f.undoStack.push(JSON.parse(JSON.stringify(f.annotations || [])));
+    if (f.undoStack.length > 10) f.undoStack.shift();
+    f.annotations = f.redoStack.pop();
+    draw(f, 1);
+  });
+
+  // ---- Arrastrar anotaciones de texto existentes ----
+  let draggingAnn = null; // referencia a la anotacion que se esta moviendo
+  let dragGrabOffset = { fx: 0, fy: 0 };
+
+  function textAnnotationBounds(a){
+    // Calcula el rectangulo (en pixeles del canvas visible) que ocupa una
+    // anotacion de texto, usando la misma fuente/tamaño con que se dibuja.
+    const w = canvas.width, h = canvas.height;
+    const baseFontSize = w*0.022;
+    const fontSize = a.big ? baseFontSize*1.6 : baseFontSize;
+    const weight = a.bold ? 'bold ' : '';
+    const style = a.italic ? 'italic ' : '';
+    const family = a.fontFamily || 'Arial, sans-serif';
+    const measureCtx = canvas.getContext('2d');
+    measureCtx.font = style + weight + fontSize + 'px ' + family;
+    const tw = measureCtx.measureText(a.text).width;
+    const pad = fontSize*0.35;
+    const x = a.x*w, y = a.y*h;
+    return { x: x-pad, y: y-pad, w: tw+pad*2, h: fontSize*1.25+pad*2 };
+  }
+
+  function hitTestText(mx, my){
+    const f = state.files[state.activeIndex];
+    if (!f || !f.annotations) return -1;
+    for (let i=f.annotations.length-1; i>=0; i--){
+      const a = f.annotations[i];
+      if (a.type !== 'text') continue;
+      const b = textAnnotationBounds(a);
+      const grow = b.h*0.25; // un poco de margen extra para que sea facil "agarrarlo"
+      if (mx >= b.x-grow && mx <= b.x+b.w+grow && my >= b.y-grow && my <= b.y+b.h+grow) return i;
+    }
+    return -1;
+  }
+
+  function distToSegment(px, py, x1, y1, x2, y2){
+    const dx = x2-x1, dy = y2-y1;
+    const lenSq = dx*dx + dy*dy;
+    let t = lenSq === 0 ? 0 : ((px-x1)*dx + (py-y1)*dy) / lenSq;
+    t = Math.max(0, Math.min(1, t));
+    const cx = x1 + t*dx, cy = y1 + t*dy;
+    return Math.hypot(px-cx, py-cy);
+  }
+
+  function hitTestAnnotation(mx, my){
+    // Devuelve el indice de la anotacion (texto o flecha) bajo el punto dado.
+    const f = state.files[state.activeIndex];
+    if (!f || !f.annotations) return -1;
+    const textIdx = hitTestText(mx, my);
+    if (textIdx >= 0) return textIdx;
+    const w = canvas.width, h = canvas.height;
+    for (let i=f.annotations.length-1; i>=0; i--){
+      const a = f.annotations[i];
+      if (a.type !== 'arrow') continue;
+      const d = distToSegment(mx, my, a.x1*w, a.y1*h, a.x2*w, a.y2*h);
+      if (d < Math.max(10, w*0.012)) return i;
+    }
+    return -1;
+  }
+
+  // Detecta si el punto cae sobre el ORIGEN, la PUNTA, o el CUERPO de una
+  // flecha existente, para poder arrastrar cada parte por separado (redirigir
+  // la punta, mover el origen, o desplazar la flecha entera).
+  function hitTestArrowHandle(mx, my){
+    const f = state.files[state.activeIndex];
+    if (!f || !f.annotations) return null;
+    const w = canvas.width, h = canvas.height;
+    const handleR = Math.max(10, w*0.014);
+    for (let i=f.annotations.length-1; i>=0; i--){
+      const a = f.annotations[i];
+      if (a.type !== 'arrow') continue;
+      const x1=a.x1*w, y1=a.y1*h, x2=a.x2*w, y2=a.y2*h;
+      if (Math.hypot(mx-x2, my-y2) < handleR) return { ann: a, mode: 'end' };
+      if (Math.hypot(mx-x1, my-y1) < handleR) return { ann: a, mode: 'start' };
+      if (distToSegment(mx, my, x1, y1, x2, y2) < Math.max(8, w*0.01)) return { ann: a, mode: 'whole' };
+    }
+    return null;
+  }
+
+  // Clic derecho sobre una flecha o texto = borrarlo individualmente (sin
+  // afectar las demas anotaciones), en vez de tener que borrar todo de una vez.
+  // Doble clic sobre un texto existente = editarlo (precarga el texto y sus
+  // estilos actuales en el mismo campo flotante).
+  canvas.addEventListener('dblclick', (e) => {
+    if (state.activeIndex < 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX-rect.left)*(canvas.width/rect.width);
+    const my = (e.clientY-rect.top)*(canvas.height/rect.height);
+    const idx = hitTestText(mx, my);
+    if (idx >= 0) {
+      const f = state.files[state.activeIndex];
+      const a = f.annotations[idx];
+      a._editing = true; // se oculta mientras se edita, para no superponerse con el input
+      draw(f, 1);
+      openTextInput(e, a.x, a.y, a);
+      return;
+    }
+    const arrowHit = hitTestArrowHandle(mx, my);
+    if (arrowHit) {
+      openColorPicker(e, arrowHit.ann);
+      return;
+    }
+    // Doble clic sobre una zona VACIA (sin texto ni flecha debajo) y sin
+    // herramienta de dibujo activa = volver a 100% de zoom, para no tener
+    // que devolver la ruedita del mouse manualmente hasta el tamano
+    // original. No hace nada si el doble clic cayo sobre una anotacion
+    // (ya se maneja arriba) o si hay una herramienta de dibujo activa.
+    if (currentTool === 'none' && zoomLevel !== 1) {
+      zoomLevel = 1;
+      applyZoom();
+      viewerWrap.scrollLeft = 0;
+      viewerWrap.scrollTop = 0;
+    }
+  });
+
+  // Mini selector de color flotante (para cambiar el color de una flecha ya
+  // dibujada, sin tener que borrarla y rehacerla).
+  function openColorPicker(e, ann){
+    const prev = document.getElementById('dv-color-picker');
+    if (prev) prev.remove();
+    const wrapRect = viewerWrap.getBoundingClientRect();
+    const box = document.createElement('div');
+    box.id = 'dv-color-picker';
+    box.style.position = 'absolute';
+    box.style.left = (e.clientX - wrapRect.left) + 'px';
+    box.style.top = (e.clientY - wrapRect.top) + 'px';
+    box.style.zIndex = '22';
+    box.style.display = 'flex';
+    box.style.gap = '4px';
+    box.style.background = '#0D1218';
+    box.style.border = '1.5px solid var(--accent)';
+    box.style.borderRadius = '4px';
+    box.style.padding = '5px';
+    const colors = ['#111111','#FFFFFF','#FF3B30','#FFEE00','#3FD0C0'];
+    colors.forEach(c => {
+      const sw = document.createElement('button');
+      sw.style.width = '18px'; sw.style.height = '18px';
+      sw.style.borderRadius = '3px';
+      sw.style.border = '1px solid #444';
+      sw.style.background = c;
+      sw.style.cursor = 'pointer';
+      sw.addEventListener('mousedown', (ev) => {
+        ev.preventDefault(); ev.stopPropagation();
+        const f = state.files[state.activeIndex];
+        pushUndo(f);
+        ann.color = c;
+        draw(f, 1);
+        box.remove();
+      });
+      box.appendChild(sw);
+    });
+    viewerWrap.appendChild(box);
+    setTimeout(() => {
+      document.addEventListener('mousedown', function onOutside(ev){
+        if (!box.contains(ev.target)) { box.remove(); document.removeEventListener('mousedown', onOutside); }
+      });
+    }, 0);
+  }
+
+  canvas.addEventListener('contextmenu', (e) => {
+    if (state.activeIndex < 0) return;
+    e.preventDefault();
+    if (suppressNextContextDelete) { suppressNextContextDelete = false; return; }
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX-rect.left)*(canvas.width/rect.width);
+    const my = (e.clientY-rect.top)*(canvas.height/rect.height);
+    const idx = hitTestAnnotation(mx, my);
+    if (idx >= 0) {
+      const f = state.files[state.activeIndex];
+      pushUndo(f);
+      f.annotations.splice(idx, 1);
+      draw(f, 1);
+    }
+  });
+
+  let draggingArrow = null; // { ann, mode: 'start'|'end'|'whole', offset1, offset2 }
+
+  canvas.addEventListener('mousemove', (e) => {
+    if (state.activeIndex < 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX-rect.left)*(canvas.width/rect.width);
+    const my = (e.clientY-rect.top)*(canvas.height/rect.height);
+    const fx = mx/canvas.width, fy = my/canvas.height;
+
+    if (draggingAnn) {
+      draggingAnn.x = fx - dragGrabOffset.fx;
+      draggingAnn.y = fy - dragGrabOffset.fy;
+      draw(state.files[state.activeIndex], 1, true);
+      return;
+    }
+    if (draggingArrow) {
+      const { ann, mode } = draggingArrow;
+      if (mode === 'end') { ann.x2 = fx; ann.y2 = fy; }
+      else if (mode === 'start') { ann.x1 = fx; ann.y1 = fy; }
+      else if (mode === 'whole') {
+        ann.x1 = fx + draggingArrow.offset1.dx; ann.y1 = fy + draggingArrow.offset1.dy;
+        ann.x2 = fx + draggingArrow.offset2.dx; ann.y2 = fy + draggingArrow.offset2.dy;
+      }
+      draw(state.files[state.activeIndex], 1, true);
+      return;
+    }
+    if ((currentTool === 'arrow' || currentTool === 'length') && dragStart) {
+      // Vista previa en vivo mientras se arrastra: antes la flecha/regla
+      // recien aparecia al soltar el mouse, sin ningun indicio del trazo
+      // mientras se iba extendiendo. Se redibuja la base (sin recalcular
+      // layout, igual que al arrastrar anotaciones) y se traza encima una
+      // linea temporal que seguira siendo reemplazada por la anotacion
+      // definitiva al soltar el clic.
+      const f = state.files[state.activeIndex];
+      draw(f, 1, true);
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      const x1 = dragStart.fx*w, y1 = dragStart.fy*h, x2 = fx*w, y2 = fy*h;
+      ctx.save();
+      if (currentTool === 'length') {
+        // Estilo identico al de la anotacion final (rojo fijo, mas fina)
+        // para que no "salte" de color/grosor justo al soltar el clic.
+        ctx.strokeStyle = '#FF3B30';
+        ctx.fillStyle = '#FF3B30';
+        ctx.lineWidth = Math.max(2, w*0.0035) * 0.7;
+      } else {
+        ctx.strokeStyle = currentTextColor;
+        ctx.fillStyle = currentTextColor;
+        ctx.lineWidth = Math.max(2, w*0.0035);
+      }
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      if (currentTool === 'arrow') {
+        const angle = Math.atan2(y2-y1, x2-x1);
+        const headLen = w*0.022;
+        ctx.beginPath();
+        ctx.moveTo(x2,y2);
+        ctx.lineTo(x2 - headLen*Math.cos(angle-Math.PI/6), y2 - headLen*Math.sin(angle-Math.PI/6));
+        ctx.lineTo(x2 - headLen*Math.cos(angle+Math.PI/6), y2 - headLen*Math.sin(angle+Math.PI/6));
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        const ang = Math.atan2(y2-y1, x2-x1);
+        const tick = w*0.006;
+        ctx.lineWidth = Math.max(1, ctx.lineWidth*0.55);
+        [[x1,y1],[x2,y2]].forEach(([px,py]) => {
+          ctx.beginPath();
+          ctx.moveTo(px + tick*Math.cos(ang+Math.PI/2), py + tick*Math.sin(ang+Math.PI/2));
+          ctx.lineTo(px - tick*Math.cos(ang+Math.PI/2), py - tick*Math.sin(ang+Math.PI/2));
+          ctx.stroke();
+        });
+        // Lectura en vivo de la distancia mientras se arrastra, igual
+        // que quedara al soltar -- asi el usuario ve el numero crecer/
+        // achicarse en tiempo real, no solo al terminar el trazo.
+        const distPix = Math.hypot(x2-x1, y2-y1);
+        const mmPerPixel = f.pixel && f.pixel.mmPerPixel;
+        const liveLabel = (mmPerPixel && !isNaN(mmPerPixel))
+          ? (distPix*mmPerPixel/10).toFixed(2) + ' cm'
+          : Math.round(distPix) + ' px';
+        const liveFontSize = w*0.022*0.85;
+        ctx.font = liveFontSize + 'px "IBM Plex Mono", monospace';
+        ctx.textAlign = (x2 >= x1) ? 'left' : 'right';
+        ctx.textBaseline = 'middle';
+        const labelOffset = w*0.014 * (x2 >= x1 ? 1 : -1);
+        ctx.lineWidth = 3; ctx.strokeStyle = '#000';
+        ctx.strokeText(liveLabel, x2 + labelOffset, y2);
+        ctx.fillStyle = '#FF3B30';
+        ctx.fillText(liveLabel, x2 + labelOffset, y2);
+      }
+      ctx.restore();
+      return;
+    }
+    if (currentTool === 'angle' && pendingPoints.length > 0 && pendingPoints.length < 3) {
+      // Vista previa dinamica mientras se arma el angulo:
+      // - Tras el 1er clic (punto A): se ve la extension de la linea hacia
+      //   el cursor, todavia sin vertice definido.
+      // - Tras el 2do clic (vertice): se ve el segundo rayo formandose
+      //   desde el vertice hacia el cursor, con los grados en vivo entre
+      //   ambos rayos, actualizandose en cada movimiento del mouse.
+      const f = state.files[state.activeIndex];
+      draw(f, 1, true);
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      ctx.save();
+      ctx.strokeStyle = currentTextColor;
+      ctx.fillStyle = currentTextColor;
+      ctx.lineWidth = Math.max(1.5, w*0.0022);
+      ctx.setLineDash([w*0.006, w*0.005]); // punteada = todavia no confirmada
+      if (pendingPoints.length === 1) {
+        const p0 = pendingPoints[0];
+        ctx.beginPath();
+        ctx.moveTo(p0.fx*w, p0.fy*h);
+        ctx.lineTo(mx, my);
+        ctx.stroke();
+      } else {
+        const p0 = pendingPoints[0], vertex = pendingPoints[1];
+        ctx.beginPath();
+        ctx.moveTo(vertex.fx*w, vertex.fy*h);
+        ctx.lineTo(mx, my);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const liveAngle = angleAtVertex(vertex, p0, { fx, fy }, w, h);
+        const fontSize = w*0.022;
+        ctx.font = fontSize*0.9 + 'px "IBM Plex Mono", monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const label = liveAngle.toFixed(1) + '°';
+        const vx = vertex.fx*w, vy = vertex.fy*h;
+        const ax = p0.fx*w, ay = p0.fy*h;
+        const labelPos = angleBisectorLabelPos(vx, vy, ax, ay, mx, my, w);
+        ctx.lineWidth = 3; ctx.strokeStyle = '#000';
+        ctx.strokeText(label, labelPos.x, labelPos.y);
+        ctx.fillStyle = currentTextColor;
+        ctx.fillText(label, labelPos.x, labelPos.y);
+      }
+      ctx.restore();
+      drawPendingPoints();
+      return;
+    }
+    const hitIdx = hitTestText(mx, my);
+    if (hitIdx >= 0) {
+      canvas.style.cursor = 'move';
+      return;
+    }
+    const arrowHit = hitTestArrowHandle(mx, my);
+    if (arrowHit) {
+      canvas.style.cursor = arrowHit.mode === 'whole' ? 'move' : 'crosshair';
+      return;
+    }
+    // Ventaneo con clic izquierdo SOSTENIDO (clasico: se presiona, se
+    // arrastra, se suelta) cuando hay zoom aplicado -- ver el mousedown
+    // mas abajo, que decide si el gesto es un CLIC (activa/desactiva el
+    // modo interactivo) o un ARRASTRE (ventanea) segun si hay movimiento.
+    if (leftWindowDrag) {
+      const dx = e.clientX - leftWindowDrag.startX, dy = e.clientY - leftWindowDrag.startY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) leftWindowDrag.moved = true;
+      if (leftWindowDrag.moved && state.activeIndex >= 0) {
+        const f = state.files[state.activeIndex];
+        const p = f.pixel;
+        if (p) {
+          const sensitivity = Math.max(p.origWindowWidth || p.windowWidth, 10) / 300;
+          p.windowWidth = Math.max(1, leftWindowDrag.startWidth + dx * sensitivity);
+          p.windowCenter = leftWindowDrag.startCenter - dy * sensitivity;
+          wlSlider.value = Math.round(p.windowCenter);
+          wwSlider.value = Math.round(p.windowWidth);
+          wlVal.textContent = Math.round(p.windowCenter);
+          wwVal.textContent = Math.round(p.windowWidth);
+          updateLiveReadout(p);
+          draw(f, 1, true);
+        }
+      }
+      canvas.style.cursor = 'ns-resize';
+      return;
+    }
+    canvas.style.cursor = currentTool === 'none' ? 'default' : 'crosshair';
+  });
+
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 2) return; // el clic derecho lo maneja el pan/borrado, no esto
+    if (state.activeIndex < 0) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX-rect.left)*(canvas.width/rect.width);
+    const my = (e.clientY-rect.top)*(canvas.height/rect.height);
+    const hitIdx = hitTestText(mx, my);
+    if (hitIdx >= 0) {
+      // Prioridad: si el clic cae sobre un texto existente, se arrastra en vez
+      // de crear una anotacion nueva, sin importar la herramienta activa.
+      const f = state.files[state.activeIndex];
+      pushUndo(f); // se guarda ANTES de mover, para poder deshacer el arrastre
+      const a = f.annotations[hitIdx];
+      draggingAnn = a;
+      dragGrabOffset = { fx: (mx/canvas.width) - a.x, fy: (my/canvas.height) - a.y };
+      return;
+    }
+    const arrowHit = hitTestArrowHandle(mx, my);
+    if (arrowHit) {
+      // Prioridad tambien sobre flechas existentes: redirigir la punta, mover
+      // el origen, o desplazar toda la flecha, sin importar la herramienta activa.
+      const f = state.files[state.activeIndex];
+      pushUndo(f);
+      const fx = mx/canvas.width, fy = my/canvas.height;
+      draggingArrow = { ann: arrowHit.ann, mode: arrowHit.mode };
+      if (arrowHit.mode === 'whole') {
+        draggingArrow.offset1 = { dx: arrowHit.ann.x1 - fx, dy: arrowHit.ann.y1 - fy };
+        draggingArrow.offset2 = { dx: arrowHit.ann.x2 - fx, dy: arrowHit.ann.y2 - fy };
+      }
+      return;
+    }
+    if (currentTool === 'none') {
+      // Un clic SIN arrastre enciende/apaga el modo interactivo (zoom con
+      // rueda) -- se registra el punto de partida para distinguirlo de un
+      // arrastre en el mouseup. Si ademas hay zoom aplicado, se prepara
+      // TAMBIEN un posible ventaneo por arrastre (clic sostenido): si el
+      // mouse se mueve mas de un umbral antes de soltar, el gesto se
+      // interpreta como ventaneo (no como el interruptor de arriba).
+      pendingToggleStart = { x: e.clientX, y: e.clientY };
+      if (zoomLevel > 1 && state.activeIndex >= 0 && state.files[state.activeIndex].pixel) {
+        const f = state.files[state.activeIndex];
+        leftWindowDrag = {
+          startX: e.clientX, startY: e.clientY,
+          startCenter: f.pixel.windowCenter, startWidth: f.pixel.windowWidth,
+          moved: false
+        };
+        updateLiveReadout(f.pixel);
+      }
+      return;
+    }
+    const { fx, fy } = canvasFraction(e);
+    if (currentTool === 'arrow') {
+      dragStart = { fx, fy };
+    } else if (currentTool === 'length') {
+      dragStart = { fx, fy };
+    } else if (currentTool === 'angle' || currentTool === 'cobb') {
+      pendingPoints.push({ fx, fy });
+      const needed = currentTool === 'angle' ? 3 : 4;
+      const f = state.files[state.activeIndex];
+      if (pendingPoints.length >= needed) {
+        f.annotations = f.annotations || [];
+        pushUndo(f);
+        if (currentTool === 'angle') {
+          // Orden de clics tal como lo usa el usuario: 1) punto A (primer
+          // rayo) 2) vertice del angulo 3) punto B (segundo rayo). El
+          // objeto guardado sigue usando las claves vertex/a/b como antes,
+          // solo cambia que ordenPoints[1] (el segundo clic) es el vertice.
+          f.annotations.push({ type: 'angle', a: pendingPoints[0], vertex: pendingPoints[1], b: pendingPoints[2], color: currentTextColor });
+        } else {
+          f.annotations.push({ type: 'cobb', p1: pendingPoints[0], p2: pendingPoints[1], p3: pendingPoints[2], p4: pendingPoints[3], color: currentTextColor });
+        }
+        pendingPoints = [];
+      }
+      draw(f, 1);
+      drawPendingPoints();
+    } else if (currentTool === 'text') {
+      openTextInput(e, fx, fy);
+    } else if (currentTool === 'marker' && activeMarker) {
+      const f = state.files[state.activeIndex];
+      f.annotations = f.annotations || [];
+      pushUndo(f);
+      f.annotations.push({
+        type: 'text', x: fx, y: fy, text: activeMarker,
+        bold: true, big: true, thick: true,
+        fontFamily: '"IBM Plex Mono", monospace',
+        color: currentTextColor
+      });
+      draw(f, 1);
+    }
+  });
+  canvas.addEventListener('mouseup', (e) => {
+    if (draggingAnn) { draggingAnn = null; return; }
+    if (draggingArrow) { draggingArrow = null; return; }
+    if (pendingToggleStart) {
+      const dx = e.clientX - pendingToggleStart.x, dy = e.clientY - pendingToggleStart.y;
+      pendingToggleStart = null;
+      const wasWindowing = !!(leftWindowDrag && leftWindowDrag.moved);
+      leftWindowDrag = null;
+      // Solo un CLIC (sin arrastre, y sin que se haya ventaneado) alterna
+      // el modo interactivo. Si hubo arrastre y se ventaneo, el gesto ya
+      // cumplio su proposito (ajustar WL/WW) y no debe ademas apagar/
+      // encender el zoom con rueda.
+      if (!wasWindowing && Math.abs(dx) < 4 && Math.abs(dy) < 4) {
+        setInteractionActive(!interactionActive);
+      }
+      return;
+    }
+    if (currentTool === 'arrow' && dragStart && state.activeIndex >= 0) {
+      const { fx, fy } = canvasFraction(e);
+      const f = state.files[state.activeIndex];
+      f.annotations = f.annotations || [];
+      // evita crear flechas de largo cero por un simple clic sin arrastre
+      if (Math.abs(fx-dragStart.fx) > 0.005 || Math.abs(fy-dragStart.fy) > 0.005) {
+        pushUndo(f);
+        f.annotations.push({ type: 'arrow', x1: dragStart.fx, y1: dragStart.fy, x2: fx, y2: fy, color: currentTextColor });
+        draw(f, 1);
+      }
+      dragStart = null;
+    } else if (currentTool === 'length' && dragStart && state.activeIndex >= 0) {
+      const { fx, fy } = canvasFraction(e);
+      const f = state.files[state.activeIndex];
+      f.annotations = f.annotations || [];
+      if (Math.abs(fx-dragStart.fx) > 0.005 || Math.abs(fy-dragStart.fy) > 0.005) {
+        pushUndo(f);
+        f.annotations.push({ type: 'length', x1: dragStart.fx, y1: dragStart.fy, x2: fx, y2: fy, color: currentTextColor });
+        draw(f, 1);
+      }
+      dragStart = null;
+    }
+  });
+
+  // Dibuja puntitos temporales (sin persistir en f.annotations) mientras se
+  // completa una herramienta de clics multiples (Angulo/Cobb), para que el
+  // usuario vea donde ya hizo clic antes de terminar la medicion.
+  function drawPendingPoints(){
+    if (!pendingPoints.length) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    ctx.save();
+    ctx.fillStyle = currentTextColor;
+    ctx.strokeStyle = currentTextColor;
+    ctx.lineWidth = Math.max(1.5, w*0.0018);
+    pendingPoints.forEach((p, i) => {
+      const x = p.fx*w, y = p.fy*h;
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(4, w*0.004), 0, Math.PI*2);
+      ctx.fill();
+      if (i > 0 && (currentTool === 'cobb' ? (i===1 || i===3) : true)) {
+        const prev = pendingPoints[i-1];
+        // Para Cobb, solo se conecta el punto 1-2 y 3-4 (2 lineas
+        // independientes, no una polilinea continua entre todos los puntos).
+        if (currentTool !== 'cobb' || i === 1 || i === 3) {
+          ctx.beginPath();
+          ctx.moveTo(prev.fx*w, prev.fy*h);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+        }
+      }
+    });
+    ctx.restore();
+  }
+
+  // Angulo (en grados) en el vertice, entre los rayos vertice->a y vertice->b.
+  // Convierte de fraccion (0-1) a pixeles reales (w,h) antes de calcular,
+  // para que el angulo sea correcto incluso si el canvas no es cuadrado.
+  function angleAtVertex(vertex, a, b, w, h){
+    const v1 = { x: (a.fx-vertex.fx)*w, y: (a.fy-vertex.fy)*h };
+    const v2 = { x: (b.fx-vertex.fx)*w, y: (b.fy-vertex.fy)*h };
+    const dot = v1.x*v2.x + v1.y*v2.y;
+    const mag1 = Math.hypot(v1.x,v1.y), mag2 = Math.hypot(v2.x,v2.y);
+    if (mag1===0 || mag2===0) return 0;
+    const cos = Math.max(-1, Math.min(1, dot/(mag1*mag2)));
+    return Math.acos(cos) * 180/Math.PI;
+  }
+
+  // Calcula donde poner la etiqueta de grados: sobre la bisectriz del
+  // angulo (la direccion "a medio camino" entre los dos rayos), a una
+  // distancia fija del vertice. Asi la etiqueta siempre cae en el espacio
+  // libre DENTRO del angulo, sin importar si este se abre hacia arriba,
+  // abajo, o a un costado -- con un offset fijo (ej. siempre arriba-
+  // derecha) la etiqueta terminaba cruzando uno de los rayos cuando el
+  // angulo apuntaba en cierta direccion.
+  function angleBisectorLabelPos(vx, vy, ax, ay, bx, by, w){
+    const v1x = ax-vx, v1y = ay-vy, v1mag = Math.hypot(v1x,v1y) || 1;
+    const v2x = bx-vx, v2y = by-vy, v2mag = Math.hypot(v2x,v2y) || 1;
+    let bisX = v1x/v1mag + v2x/v2mag, bisY = v1y/v1mag + v2y/v2mag;
+    let bisMag = Math.hypot(bisX, bisY);
+    if (bisMag < 0.0001) {
+      // Los dos rayos son casi opuestos (angulo ~180 grados) -- no hay
+      // bisectriz clara, se usa la perpendicular del primer rayo como
+      // direccion de respaldo.
+      bisX = -v1y/v1mag; bisY = v1x/v1mag; bisMag = 1;
+    }
+    const dist = w*0.045;
+    return { x: vx + (bisX/bisMag)*dist, y: vy + (bisY/bisMag)*dist };
+  }
+
+  // Angulo de Cobb: angulo AGUDO entre dos lineas independientes (no
+  // comparten vertice), tal como se mide clinicamente entre el platillo
+  // superior de la vertebra mas inclinada y el platillo inferior de la otra.
+  // Se toma el angulo agudo (<=90) entre las dos rectas, sin importar en que
+  // direccion se hizo cada clic.
+  function cobbAngleBetweenLines(p1, p2, p3, p4, w, h){
+    const v1 = { x: (p2.fx-p1.fx)*w, y: (p2.fy-p1.fy)*h };
+    const v2 = { x: (p4.fx-p3.fx)*w, y: (p4.fy-p3.fy)*h };
+    const dot = v1.x*v2.x + v1.y*v2.y;
+    const mag1 = Math.hypot(v1.x,v1.y), mag2 = Math.hypot(v2.x,v2.y);
+    if (mag1===0 || mag2===0) return 0;
+    const cos = Math.max(-1, Math.min(1, dot/(mag1*mag2)));
+    let deg = Math.acos(cos) * 180/Math.PI;
+    if (deg > 90) deg = 180 - deg;
+    return deg;
+  }
+
+  document.getElementById('dv-clear-annotations').addEventListener('click', () => {
+    if (state.activeIndex < 0) return;
+    const f = state.files[state.activeIndex];
+    pushUndo(f);
+    f.annotations = [];
+    draw(f, 1);
+  });
+
+  // Dibuja las anotaciones (flechas y textos) sobre el canvas ya renderizado.
+  // Las coordenadas se guardan como fraccion (0-1) del canvas, para que escalen
+  // correctamente sin importar la resolucion de exportacion.
+  function drawAnnotations(ctx, f){
+    const list = f.annotations || [];
+    if (!list.length) return;
+    const w = ctx.canvas.width, h = ctx.canvas.height;
+    const lineW = Math.max(2, w*0.0035);
+    const fontSize = w*0.022;
+    list.forEach(a => {
+      if (a._editing) return; // oculto mientras se edita en el campo flotante
+      if (a.type === 'arrow') {
+        const x1=a.x1*w, y1=a.y1*h, x2=a.x2*w, y2=a.y2*h;
+        const color = a.color || '#FF3B30';
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = lineW;
+        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+        const angle = Math.atan2(y2-y1, x2-x1);
+        const headLen = w*0.022;
+        ctx.beginPath();
+        ctx.moveTo(x2,y2);
+        ctx.lineTo(x2 - headLen*Math.cos(angle-Math.PI/6), y2 - headLen*Math.sin(angle-Math.PI/6));
+        ctx.lineTo(x2 - headLen*Math.cos(angle+Math.PI/6), y2 - headLen*Math.sin(angle+Math.PI/6));
+        ctx.closePath();
+        ctx.fill();
+      } else if (a.type === 'length') {
+        const x1=a.x1*w, y1=a.y1*h, x2=a.x2*w, y2=a.y2*h;
+        // Color fijo en rojo (no usa el selector de color T/N/color del
+        // panel) -- una medicion debe destacar siempre igual, sin depender
+        // de que color estaba activo al momento de trazarla.
+        const color = '#FF3B30';
+        const measureLineW = lineW * 0.7; // 30% mas fina que el resto de anotaciones
+        ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = measureLineW;
+        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+        // Marcas perpendiculares en los extremos (como una regla). Se dibujan
+        // mas finas y cortas que la linea principal -- un tope grueso del
+        // mismo ancho que la linea se ve pesado/tosco; el estandar de
+        // referencia (RadiAnt) usa una crucecita liviana apenas visible.
+        const ang = Math.atan2(y2-y1, x2-x1);
+        const tick = w*0.006;
+        ctx.lineWidth = Math.max(1, measureLineW*0.55);
+        [[x1,y1],[x2,y2]].forEach(([px,py]) => {
+          ctx.beginPath();
+          ctx.moveTo(px + tick*Math.cos(ang+Math.PI/2), py + tick*Math.sin(ang+Math.PI/2));
+          ctx.lineTo(px - tick*Math.cos(ang+Math.PI/2), py - tick*Math.sin(ang+Math.PI/2));
+          ctx.stroke();
+        });
+        ctx.lineWidth = measureLineW;
+        const dxPix = (a.x2-a.x1)*w, dyPix = (a.y2-a.y1)*h;
+        const distPix = Math.hypot(dxPix, dyPix);
+        const mmPerPixel = f.pixel && f.pixel.mmPerPixel;
+        const label = (mmPerPixel && !isNaN(mmPerPixel))
+          ? (distPix*mmPerPixel/10).toFixed(2) + ' cm'
+          : Math.round(distPix) + ' px';
+        // La etiqueta se ancla al extremo final (x2,y2) en vez del punto
+        // medio de la linea -- con varias mediciones cruzandose, los
+        // numeros centrados terminan superpuestos unos sobre otros; en el
+        // extremo cada uno tiene mas espacio propio para no chocar.
+        ctx.font = fontSize*0.85 + 'px "IBM Plex Mono", monospace';
+        ctx.textAlign = (x2 >= x1) ? 'left' : 'right';
+        ctx.textBaseline = 'middle';
+        const labelOffset = w*0.014 * (x2 >= x1 ? 1 : -1);
+        const labelX = x2 + labelOffset, labelY = y2;
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+        ctx.strokeText(label, labelX, labelY);
+        ctx.fillStyle = color;
+        ctx.fillText(label, labelX, labelY);
+      } else if (a.type === 'angle') {
+        const color = a.color || '#FF3B30';
+        const vx=a.vertex.fx*w, vy=a.vertex.fy*h;
+        const ax=a.a.fx*w, ay=a.a.fy*h;
+        const bx=a.b.fx*w, by=a.b.fy*h;
+        ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = lineW;
+        ctx.beginPath(); ctx.moveTo(vx,vy); ctx.lineTo(ax,ay); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(vx,vy); ctx.lineTo(bx,by); ctx.stroke();
+        const angleDeg = angleAtVertex(a.vertex, a.a, a.b, w, h);
+        // La etiqueta se coloca sobre la BISECTRIZ del angulo (a medio camino
+        // entre los dos rayos), no en un offset fijo hacia arriba-derecha --
+        // con un offset fijo, cuando el angulo se abre hacia arriba (vertice
+        // abajo) la etiqueta terminaba cayendo justo encima de uno de los
+        // rayos. La bisectriz garantiza que quede siempre en el espacio
+        // libre "adentro" del angulo, sin cruzar ninguna linea.
+        const labelPos = angleBisectorLabelPos(vx, vy, ax, ay, bx, by, w);
+        ctx.font = fontSize*0.85 + 'px "IBM Plex Mono", monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const label = angleDeg.toFixed(1) + '°';
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+        ctx.strokeText(label, labelPos.x, labelPos.y);
+        ctx.fillStyle = color;
+        ctx.fillText(label, labelPos.x, labelPos.y);
+      } else if (a.type === 'cobb') {
+        const color = a.color || '#FF3B30';
+        const p1={x:a.p1.fx*w,y:a.p1.fy*h}, p2={x:a.p2.fx*w,y:a.p2.fy*h};
+        const p3={x:a.p3.fx*w,y:a.p3.fy*h}, p4={x:a.p4.fx*w,y:a.p4.fy*h};
+        ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = lineW;
+        ctx.beginPath(); ctx.moveTo(p1.x,p1.y); ctx.lineTo(p2.x,p2.y); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(p3.x,p3.y); ctx.lineTo(p4.x,p4.y); ctx.stroke();
+        const cobbDeg = cobbAngleBetweenLines(a.p1,a.p2,a.p3,a.p4,w,h);
+        const label = 'Cobb: ' + cobbDeg.toFixed(1) + '°';
+        const labelX = (p1.x+p2.x+p3.x+p4.x)/4, labelY = (p1.y+p2.y+p3.y+p4.y)/4;
+        ctx.font = fontSize*0.9 + 'px "IBM Plex Mono", monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+        ctx.strokeText(label, labelX, labelY);
+        ctx.fillStyle = color;
+        ctx.fillText(label, labelX, labelY);
+      } else if (a.type === 'text') {
+        const weight = a.bold ? 'bold ' : '';
+        const style = a.italic ? 'italic ' : '';
+        const family = a.fontFamily || 'Arial, sans-serif';
+        const color = a.color || '#FF3B30';
+        const thisFontSize = a.big ? fontSize*1.6 : fontSize;
+        ctx.font = style + weight + thisFontSize + 'px ' + family;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = color;
+        const x=a.x*w, y=a.y*h;
+        if (a.framed) {
+          const metrics = ctx.measureText(a.text);
+          const pad = thisFontSize*0.35;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = Math.max(1.5, w*0.0018);
+          ctx.strokeRect(x-pad, y-pad, metrics.width+pad*2, thisFontSize*1.25+pad*2);
+        }
+        if (a.thick) {
+          // trazo grueso real (no solo negrita fina): se re-dibuja el contorno
+          // del texto con el mismo color para engrosarlo visiblemente.
+          ctx.lineWidth = thisFontSize*0.06;
+          ctx.strokeStyle = color;
+          ctx.strokeText(a.text, x, y);
+        }
+        ctx.fillText(a.text, x, y);
+      }
+    });
+  }
+
+  function updateMetaPanel(f){
+    const m = f.meta;
+    metaEl.innerHTML = '';
+    // Los campos siguen siendo editables (por si el equipo grabo mal un dato
+    // o hay un error de tipeo). Los que se graban sobre la imagen exportada
+    // (nombre, ID, fecha nacimiento, fecha/hora de estudio, institucion) se
+    // actualizan en vivo tambien en la exportacion al editarlos aqui.
+    //
+    // Paciente queda en su propia fila completa (nombre puede ser largo).
+    // El resto se compacta: ID y F.N con el label DENTRO del mismo
+    // cuadrante; Modalidad/Vista/Estudio comparten un cuadrante en 3
+    // segmentos; Fecha estudio (F.E) e Institucion comparten uno en 2.
+    let compactIdx = 0;
+    function makeCompactField(label, key, value, placeholder, flexGrow){
+      compactIdx++;
+      const field = document.createElement('div');
+      field.className = 'dv-meta-compact-field';
+      if (flexGrow !== undefined) field.style.flex = flexGrow + ' 1 0';
+      field.innerHTML = '<span class="dv-meta-compact-field-label">'+label+'</span>' +
+        '<input type="text" value="'+(value||'').replace(/"/g,'&quot;')+'"' +
+        (placeholder ? ' placeholder="'+placeholder+'"' : '') + '>';
+      const inputEl = field.querySelector('input');
+      inputEl.addEventListener('input', (e) => {
+        m[key] = e.target.value;
+        draw(f, 1);
+      });
+      return field;
+    }
+    // Paciente: fila completa, label arriba (nombre puede ser largo)
+    const pacienteRow = document.createElement('div');
+    pacienteRow.className = 'dv-meta-row';
+    pacienteRow.innerHTML = '<div class="dv-meta-label">Paciente</div>' +
+      '<div class="dv-meta-value"><input type="text" id="dv-meta-paciente" value="'+(m.patientName||'').replace(/"/g,'&quot;')+'"></div>';
+    metaEl.appendChild(pacienteRow);
+    document.getElementById('dv-meta-paciente').addEventListener('input', (e) => {
+      m.patientName = e.target.value;
+      draw(f, 1);
+    });
+
+    // ID / F.N (fecha nacimiento): un solo cuadrante, 2 segmentos
+    const idFnRow = document.createElement('div');
+    idFnRow.className = 'dv-meta-compact-row';
+    idFnRow.appendChild(makeCompactField('ID', 'patientId', m.patientId));
+    idFnRow.appendChild(makeCompactField('F.N', 'birthDate', m.birthDate));
+    metaEl.appendChild(idFnRow);
+
+    // F.E (fecha estudio) / Estudio: un cuadrante, 2 segmentos (antes aca
+    // estaban Modalidad y Vista; se intercambiaron de fila con F.E).
+    const feEstRow = document.createElement('div');
+    feEstRow.className = 'dv-meta-compact-row';
+    feEstRow.appendChild(makeCompactField('F.E', 'studyDateTimeDisplay', m.studyDateTimeDisplay));
+    feEstRow.appendChild(makeCompactField('ESTUDIO', 'studyDesc', m.studyDesc));
+    metaEl.appendChild(feEstRow);
+
+    // Modalidad / Vista / Institucion: un cuadrante, 3 segmentos (antes
+    // aca estaba F.E, que se movio arriba junto con Estudio).
+    const modVistaInstRow = document.createElement('div');
+    modVistaInstRow.className = 'dv-meta-compact-row';
+    modVistaInstRow.appendChild(makeCompactField('MOD', 'modality', m.modality, null, 0.6));
+    modVistaInstRow.appendChild(makeCompactField('VISTA', 'viewPosition', m.viewPosition, null, 0.6));
+    modVistaInstRow.appendChild(makeCompactField('INST', 'institution', m.institution, 'Sin institución', 1.8));
+    metaEl.appendChild(modVistaInstRow);
+
+    if (!m.isFrontal) {
+      const side = m.convexitySide;
+      const txt = side === 'left' ? 'Izquierda — bloque arriba-izquierda' :
+                  side === 'right' ? 'Derecha — bloque arriba-derecha' :
+                  'No se pudo determinar — overlay omitido';
+      const row = document.createElement('div');
+      row.className = 'dv-meta-row';
+      row.innerHTML = '<div class="dv-meta-label">Convexidad detectada</div><div class="dv-meta-value">'+txt+'</div>';
+      metaEl.appendChild(row);
+    }
+    wlVal.textContent = Math.round(f.pixel.windowCenter);
+    wwVal.textContent = Math.round(f.pixel.windowWidth);
+  }
+
+  // La imagen "base" (windowing + rotacion + espejo ya aplicados) es cara
+  // de generar: recorre TODOS los pixeles de la imagen nativa (puede ser
+  // varios millones en una radiografia). Antes se recalculaba desde cero
+  // en cada llamada -- incluido cada frame de mousemove al arrastrar una
+  // flecha, un texto o una letra, donde la imagen en si NO cambio, solo se
+  // movio una anotacion encima. Eso era la causa real del arrastre lento.
+  // Ahora se cachea por archivo+escala, y solo se regenera si cambio algo
+  // que realmente afecta la imagen (WL/WW, rotacion, espejo, inversion).
+  function renderBaseImage(f, scale){
+    const p = f.pixel;
+    const rotation = ((f.rotation||0)%360+360)%360;
+    const key = [p.windowCenter, p.windowWidth, rotation, !!f.flipH, !!f.flipV, !!f.invert, scale].join('|');
+    f._baseCacheByScale = f._baseCacheByScale || {};
+    const cached = f._baseCacheByScale[scale];
+    if (cached && cached.key === key) return cached.canvas;
+
+    const w = p.cols, h = p.rows;
+    const rotated90 = rotation===90 || rotation===270;
+    const outW = (rotated90 ? h : w) * scale;
+    const outH = (rotated90 ? w : h) * scale;
+
+    const workCanvas = document.createElement('canvas');
+    workCanvas.width = outW; workCanvas.height = outH;
+    const ctx = workCanvas.getContext('2d');
+    const imgData = ctx.createImageData(w, h);
+
+    if (p.samplesPerPixel === 3) {
+      for (let i=0, px=0; px < w*h; px++, i+=4) {
+        let r,g,b;
+        if (p.planarConfig === 1) {
+          r = p.raw[px]; g = p.raw[w*h+px]; b = p.raw[2*w*h+px];
+        } else {
+          r = p.raw[px*3]; g = p.raw[px*3+1]; b = p.raw[px*3+2];
+        }
+        if (f.invert) { r = 255-r; g = 255-g; b = 255-b; }
+        imgData.data[i]=r; imgData.data[i+1]=g; imgData.data[i+2]=b; imgData.data[i+3]=255;
+      }
+    } else {
+      const wc = p.windowCenter, ww = Math.max(p.windowWidth,1);
+      const lo = wc - ww/2, hi = wc + ww/2;
+      const invert = (p.photometric === 'MONOCHROME1') !== !!f.invert;
+      for (let i=0, px=0; px < w*h; px++, i+=4) {
+        let val = p.raw[px] * p.rescaleSlope + p.rescaleIntercept;
+        let g = ((val - lo) / (hi - lo)) * 255;
+        g = Math.max(0, Math.min(255, g));
+        if (invert) g = 255 - g;
+        imgData.data[i]=g; imgData.data[i+1]=g; imgData.data[i+2]=g; imgData.data[i+3]=255;
+      }
+    }
+
+    const off = document.createElement('canvas');
+    off.width = w; off.height = h;
+    off.getContext('2d').putImageData(imgData, 0, 0);
+
+    // Paso 1: rotar (sin espejo) a un canvas intermedio, en la orientacion final.
+    const rotatedCanvas = document.createElement('canvas');
+    rotatedCanvas.width = outW; rotatedCanvas.height = outH;
+    const rctx = rotatedCanvas.getContext('2d');
+    rctx.imageSmoothingEnabled = scale < 1;
+    rctx.save();
+    rctx.translate(outW/2, outH/2);
+    rctx.rotate(rotation * Math.PI/180);
+    rctx.drawImage(off, -(w*scale)/2, -(h*scale)/2, w*scale, h*scale);
+    rctx.restore();
+
+    // Paso 2: aplicar el espejo horizontal/vertical en espacio de PANTALLA (ya
+    // rotado) — asi "Horizontal" siempre espeja izquierda/derecha de lo que se
+    // ve en pantalla, y "Vertical" arriba/abajo, sin importar la rotacion activa.
+    ctx.save();
+    ctx.translate(outW/2, outH/2);
+    ctx.scale(f.flipH ? -1 : 1, f.flipV ? -1 : 1);
+    ctx.drawImage(rotatedCanvas, -outW/2, -outH/2);
+    ctx.restore();
+
+    f._baseCacheByScale[scale] = { key, canvas: workCanvas };
+    return workCanvas;
+  }
+
+  function windowToCanvas(f, targetCanvas, scale){
+    const base = renderBaseImage(f, scale);
+    targetCanvas.width = base.width;
+    targetCanvas.height = base.height;
+    const ctx = targetCanvas.getContext('2d');
+    ctx.drawImage(base, 0, 0);
+    return ctx;
+  }
+  // Nota: el overlay se calcula y dibuja DESPUES de rotar/espejar (ver draw/
+  // buildExportCanvas mas abajo), usando las dimensiones del canvas ya
+  // corregido — porque la esquina "arriba-derecha, libre de mediastino" que
+  // validamos solo es valida sobre la anatomia ya en su orientacion correcta.
+
+  // Dibuja texto ligeramente mas grueso (trazo del mismo color, sin contorno
+  // negro) para mejorar la legibilidad sin cambiar el color ni agregar borde.
+  function fillTextThick(ctx, text, x, y, fillColor, lineWidthPx){
+    ctx.lineWidth = lineWidthPx;
+    ctx.strokeStyle = fillColor;
+    ctx.fillStyle = fillColor;
+    ctx.strokeText(text, x, y);
+    ctx.fillText(text, x, y);
+  }
+
+  function drawOverlay(ctx, f, scale){
+    const m = f.meta;
+
+    // El tamaño se calcula en base al ANCHO de la imagen (no al alto): asi el bloque
+    // de texto siempre ocupa la misma proporcion horizontal de la esquina, sin
+    // invadir estructuras centrales en imagenes angostas (ej. columna vertebral).
+    const fontSize = ctx.canvas.width * 0.0177;
+    const lineHeight = ctx.canvas.width * 0.0202;
+    const margin = ctx.canvas.width * 0.00693; // +5% respecto al margen anterior (0.0066)
+    const thickW = fontSize * 0.03; // ~3% mas grueso
+    ctx.font = fontSize + 'px "IBM Plex Mono", monospace';
+    ctx.textBaseline = 'top';
+    const YELLOW = 'rgba(255,255,120,0.95)';
+    const YELLOW_DATE = 'rgba(255,235,59,0.95)';
+
+    if (m.isFrontal) {
+      // Radiografia frontal (AP/PA): bloque fijo arriba a la derecha, validado
+      // sobre torax y columna AP.
+      const lines = [m.patientName, m.patientId, m.birthDate, (m.institution || '')].filter(Boolean);
+      ctx.textAlign = 'right';
+      lines.forEach((line, i) => {
+        fillTextThick(ctx, line, ctx.canvas.width - margin, margin + i*lineHeight, i===0 ? '#FFFFFF' : YELLOW, thickW);
+      });
+      const dt = m.studyDateTimeDisplay || '';
+      fillTextThick(ctx, dt.trim(), ctx.canvas.width - margin, ctx.canvas.height - margin - fontSize, YELLOW_DATE, thickW);
+      return;
+    }
+
+    // Radiografia lateral: bloque arriba, del lado hacia el que apunta la
+    // convexidad de la columna (calculado automaticamente por pixeles). Si no
+    // se pudo determinar con confianza, no se dibuja nada (mas vale omitir el
+    // dato que arriesgar a taparlo). La fecha/hora va aparte, en la esquina
+    // inferior del mismo lado — igual estructura que en las frontales.
+    // Las laterales necesitan un margen bastante mayor que las frontales
+    // (el cuerpo ocupa mas del encuadre), asi que se usa un margen propio,
+    // mas holgado, para que el texto no invada la zona marcada como libre.
+    // El margen de abajo (fecha/hora) ya quedo validado y no se toca mas.
+    // El bloque de arriba recibe un 7% adicional de ajuste fino.
+    const bottomLateralMargin = (margin + lineHeight * 2.5) * 0.4519; // fijo, no tocar
+    const topLateralMargin = (margin + lineHeight * 2.5) * 0.2805; // ultimo ajuste fino, solo arriba
+    const side = m.convexitySide;
+    if (side !== 'left' && side !== 'right') return;
+
+    const lines = [m.patientName, m.patientId, m.birthDate, (m.institution || '')].filter(Boolean);
+    ctx.textAlign = side === 'right' ? 'right' : 'left';
+    const xTop = side === 'right' ? ctx.canvas.width - topLateralMargin : topLateralMargin;
+    const xBottom = side === 'right' ? ctx.canvas.width - bottomLateralMargin : bottomLateralMargin;
+    lines.forEach((line, i) => {
+      fillTextThick(ctx, line, xTop, topLateralMargin + i*lineHeight, i===0 ? '#FFFFFF' : YELLOW, thickW);
+    });
+    const dt = m.studyDateTimeDisplay || '';
+    fillTextThick(ctx, dt.trim(), xBottom, ctx.canvas.height - bottomLateralMargin - fontSize, YELLOW_DATE, thickW);
+  }
+
+  function draw(f, scale, skipLayout){
+    canvas.style.display = 'block';
+    emptyEl.style.display = 'none';
+    const ctx = windowToCanvas(f, canvas, scale);
+    if (window.dvShowPatientOverlay !== false) drawOverlay(ctx, f, scale);
+    if (window.dvShowAnnotations !== false) drawAnnotations(ctx, f);
+    if (skipLayout) return;
+    // fitCanvasToContainer() + updateActiveAspectRatio() recalculan el
+    // tamano/proporcion del recuadro del visor -- necesario al cargar una
+    // imagen nueva o rotarla, pero de ninguna manera en cada frame de un
+    // arrastre (flecha, texto, WL/WW), porque updateActiveAspectRatio llama
+    // a syncImageHeight(), que fuerza getBoundingClientRect() -- una medicion
+    // sincronica del DOM, costosa si se repite decenas de veces por segundo
+    // mientras se arrastra el mouse. Por eso los callers de alta frecuencia
+    // (mousemove durante arrastre) pasan skipLayout=true.
+    fitCanvasToContainer();
+    updateActiveAspectRatio(f);
+  }
+
+  // Relacion de aspecto (ancho/alto) de la imagen actualmente mostrada, ya
+  // considerando la rotacion aplicada (90/270 intercambia filas y columnas).
+  // Se usa para que el recuadro del visor se ajuste al tamano REAL de cada
+  // imagen (retrato para columna, paisaje para torax) en vez de forzar
+  // siempre una proporcion fija 11:9 pensada solo para torax -- eso era lo
+  // que dejaba enormes franjas negras vacias en radiografias de columna
+  // (imagenes verticales dentro de un recuadro pensado para horizontal).
+  let activeAspectRatio = 11/9; // default cuando no hay imagen cargada
+  window.activeAspectRatio = activeAspectRatio;
+  function updateActiveAspectRatio(f){
+    if (!f || !f.pixel) return;
+    const rotation = ((f.rotation||0)%360+360)%360;
+    const rotated90 = rotation === 90 || rotation === 270;
+    const dispW = rotated90 ? f.pixel.rows : f.pixel.cols;
+    const dispH = rotated90 ? f.pixel.cols : f.pixel.rows;
+    if (dispW > 0 && dispH > 0) {
+      activeAspectRatio = dispW / dispH;
+      window.activeAspectRatio = activeAspectRatio; // mantiene sincronizada la copia global que usa syncImageHeight() (otro bloque <script>)
+    }
+    if (typeof syncImageHeight === 'function') {
+      syncImageHeight();
+      // BUG corregido: el canvas se dimensiona en fitCanvasToContainer()
+      // (llamado ANTES, dentro de draw()) usando las medidas VIEJAS del
+      // contenedor -- recien syncImageHeight() ajusta el contenedor al
+      // tamano/proporcion real de la imagen actual. Sin este segundo
+      // llamado, el canvas quedaba dimensionado contra un contenedor
+      // obsoleto (ej. el ancho 11:9 por defecto, o el de la imagen
+      // anterior), dejando franjas negras vacias en imagenes verticales
+      // (columna) aunque el contenedor ya se hubiera angostado.
+      if (typeof fitCanvasToContainer === 'function') fitCanvasToContainer();
+    }
+  }
+
+  function buildExportCanvas(f, multiplier){
+    if (!f.meta.isFrontal && f.meta.convexitySide === undefined) {
+      f.meta.convexitySide = detectConvexitySide(f.pixel);
+    }
+    const exportCanvas = document.createElement('canvas');
+    const ctx = windowToCanvas(f, exportCanvas, multiplier);
+    drawOverlay(ctx, f, multiplier);
+    drawAnnotations(ctx, f);
+    return exportCanvas;
+  }
+
+  function sanitizeFilenamePart(s){
+    // Quita caracteres no permitidos en nombres de archivo de Windows/Mac
+    // (\ / : * ? " < > |) para que la descarga nunca falle por el nombre.
+    return (s || '').toString().trim().replace(/[\\/:*?"<>|]+/g, '_');
+  }
+
+  function buildPatientFilename(f){
+    // DICOM guarda el nombre como "Apellidos^Nombres^..." (separado por ^).
+    // El campo "Apellidos" puede traer mas de un apellido separado por
+    // espacio (ej: "Garcia Lopez"), asi que se toma solo la PRIMERA palabra
+    // de ese campo = el primer apellido.
+    const raw = (f.meta && f.meta.patientNameRaw) || '';
+    const familyField = raw.split('^')[0] || '';
+    let surname = familyField.trim().split(/\s+/)[0] || '';
+    if (!surname) surname = 'Paciente';
+    const id = sanitizeFilenamePart(f.meta && f.meta.patientId) || 'SinID';
+    return sanitizeFilenamePart(surname) + ' ' + id;
+  }
+
+  // ---- Nombre de archivo UNICO para un paciente con 2+ imagenes cargadas
+  // (columna: AP + LAT como minimo) ----
+  // Si esta misma persona (mismo apellido+DNI) tiene mas de una imagen
+  // cargada en la lista, se le agrega un diferenciador al nombre (la vista
+  // AP/LAT si el DICOM la trae, o un numero de lo contrario) para que no se
+  // sobreescriban entre si al guardarse juntas en la misma carpeta. Si la
+  // persona tiene una sola imagen (torax, el caso mas comun), el nombre
+  // queda tal cual "Apellido ID", sin cambios.
+  // Se usa tanto para "Descargar todos" como para "Descargar" individual,
+  // para que el comportamiento sea el mismo sin importar cual botón se use.
+  function buildUniqueFilename(f){
+    const base = buildPatientFilename(f);
+    const sameBase = state.files.filter(x => x.status === 'ok' && buildPatientFilename(x) === base);
+    if (sameBase.length <= 1) return base;
+    const view = (f.meta && (f.meta.viewPosition || f.meta.laterality)) || '';
+    if (view) return base + ' ' + sanitizeFilenamePart(view);
+    // Sin dato de vista en el DICOM: se numera segun el orden en que
+    // aparecen cargadas en la lista (1, 2, 3...), estable mientras la lista
+    // no cambie de orden.
+    const position = sameBase.indexOf(f) + 1;
+    return base + ' ' + position;
+  }
+
+  // ---- Red de seguridad DEFINITIVA contra perdida de imagenes por nombre
+  // repetido ----
+  // Caso real detectado: 2 imagenes DISTINTAS de un mismo paciente (ej. AP
+  // y LATERAL) pueden terminar con el MISMO nombre calculado si el equipo
+  // etiqueta mal el tag de vista (ej. las dos vienen marcadas "AP" en el
+  // DICOM, un problema de datos del equipo, no del visor). Sin esta
+  // proteccion, la segunda imagen SOBREESCRIBE silenciosamente a la
+  // primera al guardarse -- se pierde una imagen real sin ningun aviso.
+  // Esta funcion garantiza que, DENTRO DE UNA MISMA EXPORTACION, nunca se
+  // reutilice un nombre ya usado: si buildUniqueFilename() devuelve un
+  // nombre que ya se uso en esta corrida (sea cual sea el motivo), se le
+  // agrega " (2)", " (3)", etc. -- nunca se pierde una imagen por esto,
+  // pase lo que pase con los tags del DICOM.
+  function reserveUniqueFilename(baseName, usedNames){
+    let candidate = baseName;
+    let n = 2;
+    while (usedNames.has(candidate)) {
+      candidate = baseName + ' (' + n + ')';
+      n++;
+    }
+    usedNames.add(candidate);
+    return candidate;
+  }
+
+  function canvasToBlobAsync(canvasEl, mime, quality){
+    return new Promise((resolve) => canvasEl.toBlob(resolve, mime, quality));
+  }
+
+  async function downloadCanvasAsJpg(canvasEl, filename){
+    const blob = await canvasToBlobAsync(canvasEl, 'image/jpeg', 0.95);
+    const savedToFolder = await saveBlobToChosenFolder(blob, filename);
+    if (savedToFolder) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  }
+
+  async function downloadCanvasAsPng(canvasEl, filename){
+    // PNG: sin perdida (lossless). No acepta parametro de calidad porque no
+    // aplica compresion con perdida como JPG; conserva integramente los
+    // niveles de gris resultantes del windowing aplicado. Recomendado sobre
+    // JPG cuando la imagen se va a usar para analisis por IA o comparaciones
+    // finas (evita artefactos de bloque en zonas de bajo contraste, ej.
+    // espacio discal o cortical fina).
+    const blob = await canvasToBlobAsync(canvasEl, 'image/png');
+    const savedToFolder = await saveBlobToChosenFolder(blob, filename);
+    if (savedToFolder) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 2000);
+  }
+
+  // PDF individual y en bloque comparten esta misma funcion -- antes estaba
+  // duplicada en 2 lugares con pequeñas diferencias, lo que podia hacer que
+  // se desalinearan con el tiempo.
+  async function downloadCanvasAsPdf(canvasEl, filename){
+    if (window.__dvPdfFailed || !window.jspdf) {
+      throw new Error('El generador de PDF no cargó (problema de conexión).');
+    }
+    const { jsPDF } = window.jspdf;
+    const orientation = canvasEl.width >= canvasEl.height ? 'landscape' : 'portrait';
+    const pdf = new jsPDF({ orientation, unit: 'px', format: [canvasEl.width, canvasEl.height] });
+    pdf.addImage(canvasEl.toDataURL('image/jpeg', 0.95), 'JPEG', 0, 0, canvasEl.width, canvasEl.height);
+    const savedToFolder = await saveBlobToChosenFolder(pdf.output('blob'), filename);
+    if (!savedToFolder) pdf.save(filename);
+  }
+
+  // ---- Bloqueo global de exportacion ----
+  // ANTES: no habia nada que impidiera dar clic en "Descargar todos" y,
+  // mientras corria, dar clic TAMBIEN en la flecha (JPG/PDF) o en el
+  // "Descargar" individual -- eso lanzaba una SEGUNDA exportacion completa
+  // corriendo al mismo tiempo que la primera, ambas escribiendo en la misma
+  // carpeta. Resultado real observado: 46 imagenes cargadas terminaban
+  // generando 86-92 archivos en la carpeta (el mismo estudio exportado dos
+  // veces, en dos formatos distintos -- se veian como "duplicados" porque
+  // el Explorador de Windows en vista de iconos oculta la extension), y la
+  // barra de progreso saltaba entre "JPG" y "PNG" porque las dos corridas
+  // pisaban el mismo indicador. Ahora, mientras haya una exportacion en
+  // curso (individual O en bloque), TODOS los botones de descarga quedan
+  // deshabilitados -- fisicamente no se puede volver a hacer clic hasta
+  // que la que esta corriendo termine.
+  let exportBusy = false;
+  const allExportButtons = [exportMainBtn, exportOpenerBtn, exportJpgBtn, exportPdfBtn,
+    exportAllMainBtn, exportAllOpenerBtn,
+    document.getElementById('dv-export-all-jpg'), document.getElementById('dv-export-all-pdf')]
+    .filter(Boolean);
+  function setExportBusy(busy){
+    exportBusy = busy;
+    allExportButtons.forEach(btn => { btn.disabled = busy; });
+  }
+
+  // ---- Formato "recordado" del boton principal ----
+  // Antes el boton principal SIEMPRE decia "(PNG)" y SIEMPRE descargaba en
+  // PNG, sin importar que formato se hubiera elegido la ultima vez desde
+  // la flecha -- generaba dudas ("¿en verdad se guardo en JPG?"). Ahora el
+  // boton "recuerda" el ultimo formato usado en esta sesion, actualiza su
+  // propio texto para reflejarlo con precision, y un clic directo en el
+  // vuelve a usar ese mismo formato. Al recargar la pagina vuelve a
+  // arrancar en PNG (el comportamiento por defecto que se pidio antes).
+  let currentSingleFormat = 'png';
+  function updateSplitButtonLabel(mainBtn, prefix, format){
+    const label = FORMAT_LABELS[format] || format.toUpperCase();
+    mainBtn.textContent = `${prefix} (${label})`;
+    mainBtn.title = format === 'png'
+      ? 'Descarga directo en PNG (sin compresión con pérdida, recomendado para análisis de IA o telemedicina)'
+      : `Descarga directo en ${label}`;
+  }
+
+  async function exportSingle(format){
+    if (exportBusy) return;
+    if (format === 'pdf' && (window.__dvPdfFailed || !window.jspdf)) {
+      alert('El generador de PDF no cargó (problema de conexión). Puedes usar "Descargar JPG" mientras tanto.');
+      return;
+    }
+    setExportBusy(true);
+    try {
+      await ensureFolderChosen();
+      const f = state.files[state.activeIndex];
+      const mult = parseFloat(resSelect.value);
+      const c = buildExportCanvas(f, mult);
+      // Antes el PDF individual usaba el nombre original del archivo DICOM
+      // (ej. "U_2026_08_01_09_06_06.pdf"), inconsistente con PNG/JPG que
+      // usan Apellido+ID. Ahora los 3 formatos usan el mismo nombre unico
+      // basado en el paciente, igual que "Descargar todos".
+      const filename = buildUniqueFilename(f);
+      if (format === 'jpg') await downloadCanvasAsJpg(c, filename + '.jpg');
+      else if (format === 'png') await downloadCanvasAsPng(c, filename + '.png');
+      else if (format === 'pdf') await downloadCanvasAsPdf(c, filename + '.pdf');
+      const label = FORMAT_LABELS[format] || format.toUpperCase();
+      showExportProgress(1, 1, label);
+      finishExportProgress(1, label);
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  exportMainBtn.addEventListener('click', () => exportSingle(currentSingleFormat));
+  exportJpgBtn.addEventListener('click', () => {
+    currentSingleFormat = 'jpg';
+    updateSplitButtonLabel(exportMainBtn, 'Descargar', 'jpg');
+    exportSingle('jpg');
+  });
+  exportPdfBtn.addEventListener('click', () => {
+    currentSingleFormat = 'pdf';
+    updateSplitButtonLabel(exportMainBtn, 'Descargar', 'pdf');
+    exportSingle('pdf');
+  });
+
+  // ---- Barra de progreso de exportacion (centrada sobre la imagen) ----
+  // Se usa tanto para la descarga individual (destello breve confirmando
+  // el formato real que se guardo, ya que el boton principal siempre dice
+  // "(PNG)" -- esto evita la duda de "¿en verdad se descargo en JPG?"
+  // cuando se usa la flecha para elegir otro formato) como para la
+  // descarga en bloque (con el progreso real, archivo por archivo).
+  const exportProgressEl = document.getElementById('dv-export-progress');
+  const exportProgressFillEl = document.getElementById('dv-export-progress-fill');
+  const exportProgressLabelEl = document.getElementById('dv-export-progress-label');
+  function showExportProgress(done, total, formatLabel){
+    if (!exportProgressEl) return;
+    exportProgressEl.classList.remove('dv-hidden');
+    const pct = total > 0 ? Math.round((done/total)*100) : 0;
+    if (exportProgressFillEl) exportProgressFillEl.style.width = pct + '%';
+    if (exportProgressLabelEl) exportProgressLabelEl.textContent =
+      `Exportando en ${formatLabel} — ${done} de ${total} (${pct}%)`;
+  }
+  function finishExportProgress(total, formatLabel){
+    if (!exportProgressEl) return;
+    if (exportProgressFillEl) exportProgressFillEl.style.width = '100%';
+    if (exportProgressLabelEl) exportProgressLabelEl.textContent =
+      `Listo — ${total} archivo(s) en ${formatLabel} ✓`;
+    setTimeout(() => exportProgressEl.classList.add('dv-hidden'), 1400);
+    // El selector de carpeta que aparece al descargar (showDirectoryPicker)
+    // hace que el navegador salga de pantalla completa por su cuenta, como
+    // medida de seguridad -- fuera de nuestro control. Se rearma el
+    // respaldo para que, apenas la persona vuelva a hacer clic en
+    // cualquier parte (lo normal, para seguir trabajando), vuelva sola a
+    // pantalla completa.
+    armFullscreenReentryOnNextClick();
+  }
+
+  // Descarga masiva (todos los archivos "Legible"), generalizada para los
+  // 3 formatos. IMPORTANTE: es un bucle SECUENCIAL de verdad (await uno por
+  // uno) -- antes se programaban TODAS las descargas casi de una sola vez
+  // con setTimeout(idx*400ms), sin esperar a que cada una realmente
+  // terminara (armar el canvas + codificar la imagen + escribir el
+  // archivo). Con pocas imagenes no se notaba, pero con 50+ eso significaba
+  // tener decenas de imagenes de alta resolucion en memoria al mismo
+  // tiempo -- exactamente lo que causaba que la pestaña se pusiera lenta,
+  // se colgara, o se cerrara sola. Ahora cada imagen se termina de exportar
+  // por completo antes de empezar la siguiente.
+  const FORMAT_LABELS = { png: 'PNG', jpg: 'JPG', pdf: 'PDF' };
+  async function exportAllAs(kind){
+    if (exportBusy) return;
+    setExportBusy(true);
+    try {
+      await ensureFolderChosen();
+      const mult = parseFloat(resSelect.value);
+      const okFiles = state.files.filter(f => f.status === 'ok');
+      const total = okFiles.length;
+      if (!total) return;
+      const formatLabel = FORMAT_LABELS[kind] || kind.toUpperCase();
+      const usedNames = new Set(); // reinicia la proteccion anti-colision en cada exportacion
+
+      showExportProgress(0, total, formatLabel);
+      for (let i = 0; i < total; i++) {
+        const f = okFiles[i];
+        try {
+          const c = buildExportCanvas(f, mult);
+          const filename = reserveUniqueFilename(buildUniqueFilename(f), usedNames);
+          if (kind === 'jpg') {
+            await downloadCanvasAsJpg(c, filename + '.jpg');
+          } else if (kind === 'png') {
+            await downloadCanvasAsPng(c, filename + '.png');
+          } else if (kind === 'pdf') {
+            await downloadCanvasAsPdf(c, filename + '.pdf');
+          }
+        } catch (err) {
+          console.error('No se pudo exportar', f.name, err);
+        }
+        showExportProgress(i + 1, total, formatLabel);
+        // Pequeña pausa entre imagen e imagen: le da tiempo al navegador de
+        // liberar memoria (recolector de basura) y de seguir respondiendo a
+        // la interfaz mientras exporta muchas imagenes seguidas.
+        await new Promise(resolve => setTimeout(resolve, 60));
+      }
+      finishExportProgress(total, formatLabel);
+    } finally {
+      setExportBusy(false);
+    }
+  }
+  let currentBatchFormat = 'png';
+  exportAllMainBtn.addEventListener('click', () => exportAllAs(currentBatchFormat));
+  document.getElementById('dv-export-all-jpg').addEventListener('click', () => {
+    currentBatchFormat = 'jpg';
+    updateSplitButtonLabel(exportAllMainBtn, 'Descargar todos', 'jpg');
+    exportAllAs('jpg');
+  });
+  document.getElementById('dv-export-all-pdf').addEventListener('click', () => {
+    currentBatchFormat = 'pdf';
+    updateSplitButtonLabel(exportAllMainBtn, 'Descargar todos', 'pdf');
+    exportAllAs('pdf');
+  });
+})();
+</script>
+<script>
+(function(){
+  function syncImageHeight(){
+    const aspectBox = document.querySelector('.dv-viewer-aspect');
+    if (!aspectBox) return;
+
+    // Se dejó de atar el tamaño de la imagen a la altura de la columna
+    // izquierda (panel de miniaturas/datos) -- eso era justo lo que la
+    // venía achicando cada vez mas. Un visor profesional (RadiAnt, etc.)
+    // usa CASI TODA la ventana del navegador para la imagen, sin importar
+    // cuanto contenido tenga el panel lateral. Ahora es igual: el alto
+    // maximo disponible es "desde donde arranca el cuadro hasta casi el
+    // final de la ventana", y el ancho el que tenga disponible la columna
+    // de la imagen -- lo que sea mas grande respetando la proporcion real.
+    aspectBox.style.flex = '';
+    aspectBox.style.width = '100%';
+    aspectBox.style.height = 'auto';
+    aspectBox.style.margin = '0 auto';
+
+    const rect = aspectBox.getBoundingClientRect();
+    const availW = rect.width;
+    const maxH = Math.max(300, window.innerHeight - rect.top - 24);
+    if (!availW) return;
+
+    const ratio = (typeof window.activeAspectRatio === 'number' ? window.activeAspectRatio : (11/9));
+    // El cuadro mas grande que respeta la proporcion real de la imagen y
+    // cabe tanto en el ancho disponible como en el alto disponible
+    // (formula estandar de "contain"): si la imagen es ancha (torax), el
+    // ancho suele mandar; si es angosta y alta (columna), el alto manda y
+    // el cuadro queda angosto pero TAN ALTO como el maximo disponible --
+    // no un cuadro grande con la imagen chica adentro con franjas negras.
+    let boxW = Math.min(availW, maxH * ratio);
+    let boxH = boxW / ratio;
+
+    aspectBox.style.width = boxW + 'px';
+    aspectBox.style.height = boxH + 'px';
+
+    // Con el cuadro ya en su tamano final, se reajusta la imagen adentro.
+    if (typeof window.fitCanvasToContainer === 'function') window.fitCanvasToContainer();
+  }
+
+  window.addEventListener('load', syncImageHeight);
+  window.addEventListener('resize', syncImageHeight);
+  // reintento breve por si las fuentes/layout tardan en asentarse
+  setTimeout(syncImageHeight, 300);
+  setTimeout(syncImageHeight, 800);
+
+  // BUG REAL corregido: esta funcion vivia encerrada dentro de este IIFE y
+  // nunca se exponia globalmente. El codigo en draw()/updateActiveAspectRatio
+  // (en otro bloque <script> separado) intenta llamarla via
+  // "typeof syncImageHeight === 'function'", pero esa comprobacion busca en
+  // el ambito GLOBAL -- como la funcion nunca se adjunto a window, esa
+  // comprobacion siempre daba false en silencio, y syncImageHeight() jamas
+  // se ejecutaba al cambiar de imagen (solo corria una vez al cargar la
+  // pagina y en resize). Por eso el recuadro del visor se quedaba con la
+  // proporcion de la ULTIMA vez que corrio (o la de fabrica 11:9), sin
+  // importar que tan vertical/horizontal fuera la imagen realmente activa.
+  window.syncImageHeight = syncImageHeight;
+})();
+</script>
+<script>
+(function(){
+  // ==================== Control de acceso (candado) ====================
+  // Un candado 100% en el navegador no puede ser seguro de verdad (ver
+  // conversacion): esta parte solo pinta la pantalla y guarda el codigo;
+  // la validacion REAL (existe, no vencio, no fue revocado) la hace el
+  // servidor (Cloudflare Worker) en /validate. Sin ese servidor desplegado
+  // y sin reemplazar la URL de abajo, el candado no puede confirmar nada.
+  const ACCESS_WORKER_URL = 'https://imedicom-access.imedica.workers.dev';
+  window.ACCESS_WORKER_URL = ACCESS_WORKER_URL; // usado tambien por "pegar link de Drive"
+
+  const STORAGE_KEY = 'dv_access_session';
+  const DEVICE_KEY = 'dv_device_id';
+  const REVALIDATE_MS = 5 * 60 * 1000; // revalida cada 5 min mientras esta abierto
+  const NOT_CONFIGURED = ACCESS_WORKER_URL.includes('REEMPLAZAR');
+
+  const root = document.getElementById('dv-root');
+  const lockScreen = document.getElementById('dv-lock-screen');
+  const input = document.getElementById('dv-lock-input');
+  const btn = document.getElementById('dv-lock-btn');
+  const msg = document.getElementById('dv-lock-msg');
+
+  function getDeviceId(){
+    try {
+      let id = localStorage.getItem(DEVICE_KEY);
+      if (!id) {
+        id = (crypto && crypto.randomUUID) ? crypto.randomUUID() :
+          'dv-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+        localStorage.setItem(DEVICE_KEY, id);
+      }
+      return id;
+    } catch(e) { return 'dv-nolocal-' + Date.now(); }
+  }
+  const DEVICE_ID = getDeviceId();
+
+  const fsControlsEl = document.getElementById('dv-fullscreen-controls');
+  function unlock(){
+    root.classList.remove('dv-locked');
+    lockScreen.classList.add('dv-hidden');
+    if (fsControlsEl) fsControlsEl.classList.add('dv-show');
+  }
+  function lock(){
+    root.classList.add('dv-locked');
+    lockScreen.classList.remove('dv-hidden');
+    if (fsControlsEl) fsControlsEl.classList.remove('dv-show');
+  }
+  function showMsg(text, isErr){
+    // El texto siempre viene del diccionario REASONS (fijo, no de datos
+    // externos ni del usuario), asi que es seguro usar innerHTML aqui
+    // solo para poder forzar el salto de linea con "\n" -> <br>.
+    msg.innerHTML = String(text).split('\n').map(escapeHtmlMsg).join('<br>');
+    msg.className = 'dv-lock-msg ' + (isErr ? 'dv-err' : 'dv-ok');
+  }
+  function escapeHtmlMsg(s){
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function saveSession(code){
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ code, validatedAt: Date.now() })); } catch(e){}
+  }
+  function readSession(){
+    try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : null; } catch(e){ return null; }
+  }
+  function clearSession(){
+    try { localStorage.removeItem(STORAGE_KEY); } catch(e){}
+  }
+
+  const REASONS = {
+    not_found: 'Código no encontrado.',
+    expired: 'Este código venció.',
+    revoked: 'Este código fue desactivado.',
+    missing_code: 'Ingresá un código.',
+    missing_device: 'No se pudo identificar el dispositivo. Recargá la página.',
+    device_limit: 'Este código ya alcanzó su límite\nde dispositivos autorizados.'
+  };
+
+  async function attemptCode(code, silent){
+    if (NOT_CONFIGURED) {
+      lock();
+      showMsg('El candado todavía no está configurado (falta desplegar el servidor de validación).', true);
+      return;
+    }
+    if (!silent) { btn.disabled = true; showMsg('Verificando…', false); }
+    try {
+      const resp = await fetch(ACCESS_WORKER_URL + '/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, deviceId: DEVICE_ID })
+      });
+      const result = await resp.json();
+      if (result.valid) {
+        saveSession(code);
+        unlock();
+        if (!silent) {
+          showMsg('Acceso concedido' + (result.expiresAt ? (' — vence ' + new Date(result.expiresAt).toLocaleDateString('es-PE')) : ''), false);
+        }
+      } else {
+        clearSession();
+        lock();
+        showMsg(REASONS[result.reason] || 'Código inválido.', true);
+      }
+    } catch(err){
+      if (silent) {
+        // Problema de red al revalidar en segundo plano: no se corta de
+        // golpe una sesion que ya estaba adentro por un corte de conexion
+        // pasajero -- se reintenta en el proximo ciclo.
+        return;
+      }
+      showMsg('No se pudo conectar para validar el código. Revisá tu conexión.', true);
+    } finally {
+      if (!silent) { btn.disabled = false; }
+    }
+  }
+
+  btn.addEventListener('click', () => {
+    const code = input.value.trim();
+    if (!code) { showMsg('Ingresá un código.', true); return; }
+    requestViewerFullscreen(); // se pide ACA, de forma sincronica con el clic -- los navegadores exigen que el pedido de pantalla completa este pegado al gesto del usuario, no despues de esperar una respuesta del servidor.
+    attemptCode(code, false);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') btn.click();
+  });
+
+  // Si hay una sesion guardada, se revalida contra el servidor al cargar
+  // (para respetar revocaciones/vencimientos que hayas hecho desde la
+  // ultima vez), y despues periodicamente mientras la pestaña sigue
+  // abierta -- si revocas o vence el codigo del lado del servidor, el
+  // acceso se corta solo, sin que el usuario tenga que recargar.
+  const session = readSession();
+  if (session && session.code) {
+    input.value = session.code;
+    attemptCode(session.code, true);
+  }
+  setInterval(() => {
+    const s = readSession();
+    if (s && s.code && !root.classList.contains('dv-locked')) {
+      attemptCode(s.code, true);
+    }
+  }, REVALIDATE_MS);
+})();
+</script>
