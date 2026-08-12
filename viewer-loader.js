@@ -48,6 +48,15 @@
       );
     }
 
+    if(window.imeDicomViewport?.init){
+      text=replaceFunctionBlock(
+        text,
+        '  // ---- Zoom: el tamaño de ajuste',
+        '\n  // ---- Herramientas de anotacion: flecha y texto',
+        "  const viewerWrap = document.getElementById('dv-viewer-wrap');\n  let zoomLevel = 1;\n  let interactionActive = false;\n  let pendingToggleStart = null;\n  let leftWindowDrag = null;\n  let suppressNextContextDelete = false;\n  const viewportController = window.imeDicomViewport.init({\n    state, canvas, draw, wlSlider, wwSlider, wlVal, wwVal,\n    isInteractionActive:()=>interactionActive,\n    onZoomChange:(v)=>{ zoomLevel=v; },\n    onSuppressContextDelete:()=>{ suppressNextContextDelete=true; }\n  });\n  function setInteractionActive(on){ interactionActive=!!on; viewportController.setInteractionActive(interactionActive); }\n  function fitCanvasToContainer(){ return viewportController.fitCanvasToContainer(); }\n  window.fitCanvasToContainer = fitCanvasToContainer;\n  function applyZoom(){ viewportController.setZoomLevel(zoomLevel); }\n\n"
+      );
+    }
+
     if(window.imeDicomTools){
       text=text.replace(/\bpushUndo\(f\);/g,'window.imeDicomTools.pushUndo(f);');
       text=text.replace(/const angleDeg = angleAtVertex\(/g,'const angleDeg = window.imeDicomTools.angleAtVertex(');
@@ -107,6 +116,7 @@
     if(!window.imeDicomRuntime?.initFullscreen) throw new Error('viewer-runtime.js no fue cargado');
     if(!window.imeDicomAccess?.init) throw new Error('viewer-access.js no fue cargado');
     if(!window.imeDicomLoad?.init) throw new Error('viewer-load.js no fue cargado');
+    if(!window.imeDicomViewport?.init) throw new Error('viewer-viewport.js no fue cargado');
 
     const response=await fetch('viewer-source.html',{cache:'no-store'});
     if(!response.ok) throw new Error('HTTP '+response.status);
@@ -124,8 +134,8 @@
     mount.innerHTML=parsed.body.innerHTML;
     await executeScripts(scripts);
     window.imeDicomUi.applyPremiumDom();
-    document.documentElement.dataset.viewerIntegration='direct-dom-modular-source-data-ui-runtime-access-load-extracted';
-    console.info('imeDICOM: parser, metadata/pixel, UI, fullscreen, acceso y carga DICOM separados; fuente transicional activa para viewport');
+    document.documentElement.dataset.viewerIntegration='direct-dom-modular-source-data-ui-runtime-access-load-viewport-extracted';
+    console.info('imeDICOM: viewport, zoom, pan, WW/WL y touch separados; fuente transicional activa para eventos de anotacion restantes');
   }catch(err){
     console.error(err);
     mount.innerHTML='<div style="height:100%;display:grid;place-items:center;padding:32px;text-align:center;color:#d8e2e8;background:#061018"><div><div style="font-size:18px;font-weight:700;margin-bottom:8px">No se pudo inicializar el visor</div><div style="font-size:13px;color:#91a2af">Recarga la página. El respaldo legacy-viewer.html permanece intacto para recuperación manual.</div></div></div>';
