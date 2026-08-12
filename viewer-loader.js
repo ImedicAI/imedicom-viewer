@@ -29,6 +29,13 @@
     }
   }
 
+  function replaceFunctionBlock(text,startMarker,endMarker,replacement){
+    const start=text.indexOf(startMarker);
+    const end=text.indexOf(endMarker,start);
+    if(start<0||end<0) return text;
+    return text.slice(0,start)+replacement+text.slice(end);
+  }
+
   function replaceInlineModules(sourceText){
     let text=sourceText;
 
@@ -44,13 +51,33 @@
     }
 
     if(window.imeDicomTools){
-      // La gestión de snapshots de anotaciones ya vive en viewer-tools.js.
       text=text.replace(/\bpushUndo\(f\);/g,'window.imeDicomTools.pushUndo(f);');
-
-      // Los cálculos geométricos de medición se resuelven desde el módulo externo.
       text=text.replace(/const angleDeg = angleAtVertex\(/g,'const angleDeg = window.imeDicomTools.angleAtVertex(');
       text=text.replace(/const cobbDeg = cobbAngleBetweenLines\(/g,'const cobbDeg = window.imeDicomTools.cobbAngleBetweenLines(');
       text=text.replace(/const labelPos = angleBisectorLabelPos\(/g,'const labelPos = window.imeDicomTools.angleBisectorLabelPos(');
+    }
+
+    if(window.imeDicomExport){
+      text=replaceFunctionBlock(
+        text,
+        '  function buildExportCanvas(f, multiplier){',
+        '\n  function sanitizeFilenamePart(s){',
+        "  function buildExportCanvas(f, multiplier){\n    return window.imeDicomExport.buildExportCanvas(f, multiplier, { windowToCanvas, drawOverlay, drawAnnotations, detectConvexitySide });\n  }\n"
+      );
+
+      text=replaceFunctionBlock(
+        text,
+        '  function sanitizeFilenamePart(s){',
+        '\n  // ---- Bloqueo global de exportacion ----',
+        "  function sanitizeFilenamePart(s){ return window.imeDicomExport.sanitizeFilenamePart(s); }\n"+
+        "  function buildPatientFilename(f){ return window.imeDicomExport.buildPatientFilename(f); }\n"+
+        "  function buildUniqueFilename(f){ return window.imeDicomExport.buildUniqueFilename(f, state.files); }\n"+
+        "  function reserveUniqueFilename(baseName, usedNames){ return window.imeDicomExport.reserveUniqueFilename(baseName, usedNames); }\n"+
+        "  function canvasToBlobAsync(canvasEl, mime, quality){ return window.imeDicomExport.canvasToBlobAsync(canvasEl, mime, quality); }\n"+
+        "  async function downloadCanvasAsJpg(canvasEl, filename){ return window.imeDicomExport.downloadCanvasAsJpg(canvasEl, filename, saveBlobToChosenFolder); }\n"+
+        "  async function downloadCanvasAsPng(canvasEl, filename){ return window.imeDicomExport.downloadCanvasAsPng(canvasEl, filename, saveBlobToChosenFolder); }\n"+
+        "  async function downloadCanvasAsPdf(canvasEl, filename){ return window.imeDicomExport.downloadCanvasAsPdf(canvasEl, filename, saveBlobToChosenFolder); }\n"
+      );
     }
 
     return text;
@@ -80,6 +107,7 @@
   try{
     if(!window.imeDicomCore?.dicomParser) throw new Error('dicom-core.js no fue cargado');
     if(!window.imeDicomTools) throw new Error('viewer-tools.js no fue cargado');
+    if(!window.imeDicomExport) throw new Error('viewer-export.js no fue cargado');
 
     const response=await fetch('legacy-viewer.html',{cache:'no-store'});
     if(!response.ok) throw new Error('HTTP '+response.status);
@@ -97,8 +125,8 @@
     mount.innerHTML=parsed.body.innerHTML;
     await executeScripts(scripts);
     applyPremiumDom();
-    document.documentElement.dataset.viewerIntegration='direct-dom-core-tools-extracted';
-    console.info('imeDICOM: parser y helpers de herramientas/medición externos');
+    document.documentElement.dataset.viewerIntegration='direct-dom-core-tools-export-extracted';
+    console.info('imeDICOM: parser, herramientas y exportación modularizados');
   }catch(err){
     console.error(err);
     mount.innerHTML='<div style="height:100%;display:grid;place-items:center;padding:32px;text-align:center;color:#d8e2e8;background:#061018"><div><div style="font-size:18px;font-weight:700;margin-bottom:8px">No se pudo inicializar el visor</div><div style="font-size:13px;color:#91a2af">Recarga la página. La versión de respaldo permanece disponible en legacy-viewer.html.</div></div></div>';
