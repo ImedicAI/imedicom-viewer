@@ -39,6 +39,15 @@
       );
     }
 
+    if(window.imeDicomData?.extractMeta && window.imeDicomData?.extractPixel){
+      text=replaceFunctionBlock(
+        text,
+        '  function dicomStr(dataSet, tag){',
+        '\n  // Calcula, para imagenes en vista lateral,',
+        "  function dicomStr(dataSet, tag){ return window.imeDicomData.dicomStr(dataSet, tag); }\n  function formatName(raw){ return window.imeDicomData.formatName(raw); }\n  function formatDate(raw){ return window.imeDicomData.formatDate(raw); }\n  function extractMeta(dataSet){ return window.imeDicomData.extractMeta(dataSet); }\n  function extractPixel(dataSet){ return window.imeDicomData.extractPixel(dataSet); }\n"
+      );
+    }
+
     if(window.imeDicomTools){
       text=text.replace(/\bpushUndo\(f\);/g,'window.imeDicomTools.pushUndo(f);');
       text=text.replace(/const angleDeg = angleAtVertex\(/g,'const angleDeg = window.imeDicomTools.angleAtVertex(');
@@ -90,6 +99,7 @@
 
   try{
     if(!window.imeDicomCore?.dicomParser) throw new Error('dicom-core.js no fue cargado');
+    if(!window.imeDicomData?.extractMeta || !window.imeDicomData?.extractPixel) throw new Error('viewer-dicom-data.js no fue cargado');
     if(!window.imeDicomTools) throw new Error('viewer-tools.js no fue cargado');
     if(!window.imeDicomRender) throw new Error('viewer-render.js no fue cargado');
     if(!window.imeDicomExport) throw new Error('viewer-export.js no fue cargado');
@@ -114,8 +124,8 @@
     mount.innerHTML=parsed.body.innerHTML;
     await executeScripts(scripts);
     window.imeDicomUi.applyPremiumDom();
-    document.documentElement.dataset.viewerIntegration='direct-dom-modular-source-ui-runtime-access-load-extracted';
-    console.info('imeDICOM: UI, fullscreen, acceso y carga DICOM separados; fuente transicional activa para metadata y viewport');
+    document.documentElement.dataset.viewerIntegration='direct-dom-modular-source-data-ui-runtime-access-load-extracted';
+    console.info('imeDICOM: parser, metadata/pixel, UI, fullscreen, acceso y carga DICOM separados; fuente transicional activa para viewport');
   }catch(err){
     console.error(err);
     mount.innerHTML='<div style="height:100%;display:grid;place-items:center;padding:32px;text-align:center;color:#d8e2e8;background:#061018"><div><div style="font-size:18px;font-weight:700;margin-bottom:8px">No se pudo inicializar el visor</div><div style="font-size:13px;color:#91a2af">Recarga la página. El respaldo legacy-viewer.html permanece intacto para recuperación manual.</div></div></div>';
