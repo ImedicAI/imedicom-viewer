@@ -29,6 +29,17 @@
     }
   }
 
+  function replaceInlineCore(sourceText){
+    if(!window.imeDicomCore?.dicomParser) return sourceText;
+    const startMarker='  const dicomParser = {';
+    const endMarker='\n  };\n\n  const state = { files: [], activeIndex: -1 };';
+    const start=sourceText.indexOf(startMarker);
+    const end=sourceText.indexOf(endMarker,start);
+    if(start<0 || end<0) return sourceText;
+    const replacement='  const dicomParser = window.imeDicomCore.dicomParser;\n\n  const state = { files: [], activeIndex: -1 };';
+    return sourceText.slice(0,start)+replacement+sourceText.slice(end+endMarker.length);
+  }
+
   async function executeScripts(scripts){
     for(const source of scripts){
       await new Promise(resolve=>{
@@ -42,7 +53,7 @@
           s.onerror=()=>{console.warn('imeDICOM: no se pudo cargar',s.src);resolve();};
           document.body.appendChild(s);
         }else{
-          s.textContent=source.textContent;
+          s.textContent=replaceInlineCore(source.textContent);
           document.body.appendChild(s);
           resolve();
         }
@@ -51,6 +62,8 @@
   }
 
   try{
+    if(!window.imeDicomCore?.dicomParser) throw new Error('dicom-core.js no fue cargado');
+
     const response=await fetch('legacy-viewer.html',{cache:'no-store'});
     if(!response.ok) throw new Error('HTTP '+response.status);
     const html=await response.text();
@@ -67,8 +80,8 @@
     mount.innerHTML=parsed.body.innerHTML;
     await executeScripts(scripts);
     applyPremiumDom();
-    document.documentElement.dataset.viewerIntegration='direct-dom-modular-loader';
-    console.info('imeDICOM: visor montado en DOM directo mediante viewer-loader.js');
+    document.documentElement.dataset.viewerIntegration='direct-dom-core-extracted';
+    console.info('imeDICOM: DOM directo con parser DICOM externo');
   }catch(err){
     console.error(err);
     mount.innerHTML='<div style="height:100%;display:grid;place-items:center;padding:32px;text-align:center;color:#d8e2e8;background:#061018"><div><div style="font-size:18px;font-weight:700;margin-bottom:8px">No se pudo inicializar el visor</div><div style="font-size:13px;color:#91a2af">Recarga la página. La versión de respaldo permanece disponible en legacy-viewer.html.</div></div></div>';
