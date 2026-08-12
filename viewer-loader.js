@@ -155,23 +155,28 @@
     if(!window.imeDicomViewport?.init) throw new Error('viewer-viewport.js no fue cargado');
     if(!window.imeDicomAnnotationInteraction) throw new Error('viewer-annotation-interaction.js no fue cargado');
 
-    const response=await fetch('viewer-source.html',{cache:'no-store'});
-    if(!response.ok) throw new Error('HTTP '+response.status);
-    const html=await response.text();
-    const parsed=new DOMParser().parseFromString(html,'text/html');
-    const scripts=[...parsed.querySelectorAll('script')];
-    scripts.forEach(s=>s.remove());
+    const [shellResponse,scriptsResponse]=await Promise.all([
+      fetch('viewer-shell.html',{cache:'no-store'}),
+      fetch('viewer-legacy-scripts.html',{cache:'no-store'})
+    ]);
+    if(!shellResponse.ok) throw new Error('viewer-shell HTTP '+shellResponse.status);
+    if(!scriptsResponse.ok) throw new Error('viewer-legacy-scripts HTTP '+scriptsResponse.status);
+    const shellHtml=await shellResponse.text();
+    const scriptsHtml=await scriptsResponse.text();
+    const parsedShell=new DOMParser().parseFromString(shellHtml,'text/html');
+    const parsedScripts=new DOMParser().parseFromString(scriptsHtml,'text/html');
+    const scripts=[...parsedScripts.querySelectorAll('script')];
 
-    for(const node of [...parsed.head.querySelectorAll('style,link[rel="stylesheet"]')]){
+    for(const node of [...parsedShell.head.querySelectorAll('style,link[rel="stylesheet"]')]){
       const clone=node.cloneNode(true);
       clone.dataset.viewerBaseStyle='true';
       document.head.appendChild(clone);
     }
 
-    mount.innerHTML=parsed.body.innerHTML;
+    mount.innerHTML=parsedShell.body.innerHTML;
     await executeScripts(scripts);
     window.imeDicomUi.applyPremiumDom();
-    document.documentElement.dataset.viewerIntegration='direct-dom-modular-source-data-ui-runtime-access-load-viewport-annotation-hit-extracted';
+    document.documentElement.dataset.viewerIntegration='split-shell-modular-data-ui-runtime-access-load-viewport-annotation-hit-extracted';
     document.documentElement.dataset.viewerReplacementCount=String(replacementAudit.length);
     console.info('imeDICOM: integración modular aplicada',replacementAudit);
   }catch(err){
