@@ -58,7 +58,7 @@
     }
 
     if(window.imeDicomAnnotationInteraction){
-      text=replaceFunctionBlock(text,'  function canvasFraction(e){','\n  const FIXED_FONT',"  function canvasFraction(e){ return window.imeDicomAnnotationInteraction.canvasFraction(canvas,e); }\n\n  const FIXED_FONT");
+      text=replaceFunctionBlock(text,'  function canvasFraction(e){','\n  const FIXED_FONT',"  function canvasFraction(e){ return window.imeDicomAnnotationInteraction.canvasFraction(canvas,e); }\n");
       text=replaceFunctionBlock(text,'  function textAnnotationBounds(a){','\n  function hitTestText(mx, my){',"  function textAnnotationBounds(a){ return window.imeDicomAnnotationInteraction.textAnnotationBounds(canvas,a); }\n");
       text=replaceFunctionBlock(text,'  function hitTestText(mx, my){','\n  function distToSegment(px, py, x1, y1, x2, y2){',"  function hitTestText(mx,my){ const f=state.files[state.activeIndex]; return window.imeDicomAnnotationInteraction.hitTestText(canvas,f,mx,my); }\n");
       text=replaceFunctionBlock(text,'  function distToSegment(px, py, x1, y1, x2, y2){','\n  function hitTestAnnotation(mx, my){',"  function distToSegment(px,py,x1,y1,x2,y2){ return window.imeDicomAnnotationInteraction.distToSegment(px,py,x1,y1,x2,y2); }\n");
