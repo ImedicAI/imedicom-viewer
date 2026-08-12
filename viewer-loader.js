@@ -114,11 +114,19 @@
     for(const source of scripts){
       await new Promise((resolve,reject)=>{
         const s=document.createElement('script');
-        for(const a of source.attributes) if(a.name!=='src') s.setAttribute(a.name,a.value);
+        for(const a of source.attributes) if(a.name!=='src'&&a.name!=='onerror') s.setAttribute(a.name,a.value);
         if(source.src){
-          s.src=source.getAttribute('src');
+          const originalSrc=source.getAttribute('src');
+          const hasFallback=source.hasAttribute('onerror');
+          const fallbackCode=source.getAttribute('onerror')||'';
+          s.src=originalSrc;
           s.onload=resolve;
-          s.onerror=()=>{const err=new Error('imeDICOM: no se pudo cargar '+s.src);console.error(err);reject(err);};
+          s.onerror=()=>{
+            if(fallbackCode.includes('__dvPdfFailed')) window.__dvPdfFailed=true;
+            const err=new Error('imeDICOM: no se pudo cargar '+originalSrc);
+            if(hasFallback){ console.warn(err.message+'; se mantiene el fallback previsto'); resolve(); }
+            else { console.error(err); reject(err); }
+          };
           document.body.appendChild(s);
         }else{
           try{
