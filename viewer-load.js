@@ -63,6 +63,10 @@
     }catch(e){return null;}
   }
 
+  function emit(name,detail){
+    try{ window.dispatchEvent(new CustomEvent(name,{detail})); }catch(e){}
+  }
+
   function init(deps){
     const {state,dicomParser,extractMeta,extractPixel,renderFileList,selectFile,reenterFullscreenIfPending}=deps||{};
     if(!state||!dicomParser||!extractMeta||!extractPixel||!renderFileList||!selectFile){
@@ -108,12 +112,18 @@
             entry.error=err&&err.message?err.message:'No se pudo leer el archivo';
           }
           renderFileList();
-          if(entry.status==='ok')selectFile(idx);
+          if(entry.status==='ok'){
+            selectFile(idx);
+            emit('imeDicom:file-loaded',{index:idx,entry});
+          }else{
+            emit('imeDicom:file-error',{index:idx,entry,error:entry.error});
+          }
         };
         reader.onerror=function(){
           entry.status='error';
           entry.error='Error de lectura del archivo';
           renderFileList();
+          emit('imeDicom:file-error',{index:idx,entry,error:entry.error});
         };
         reader.readAsArrayBuffer(file);
       });
