@@ -22,10 +22,10 @@
     let text=sourceText;
     if(window.imeDicomCore?.dicomParser){
       const startMarker='  const dicomParser = {';
-      const endMarker='\n  };\n\n  const state = { files: [], activeIndex: -1 };';
-      const start=text.indexOf(startMarker),end=text.indexOf(endMarker,start);
-      if(start<0||end<0) throw new Error('Integración modular: no se encontró el parser DICOM legado esperado');
-      text=text.slice(0,start)+'  const dicomParser = window.imeDicomCore.dicomParser;\n\n  const state = { files: [], activeIndex: -1 };'+text.slice(end+endMarker.length);
+      const stateMarker='  const state = { files: [], activeIndex: -1 };';
+      const start=text.indexOf(startMarker),stateAt=text.indexOf(stateMarker,start);
+      if(start<0||stateAt<0) throw new Error('Integración modular: no se encontró el parser/state DICOM legado esperado');
+      text=text.slice(0,start)+'  const dicomParser = window.imeDicomCore.dicomParser;\n\n'+text.slice(stateAt);
       replacementAudit.push('dicom-parser');
     }
 
