@@ -50,10 +50,30 @@ jobs:
           cat > tests/export-test.js <<'JS'
           (function(){
             const result=document.createElement('div'); result.id='ime-export-result'; result.style.display='none'; document.body.appendChild(result);
+            const stage=s=>{result.dataset.stage=s;};
             const finish=(s,d)=>{result.dataset.status=s;result.textContent=JSON.stringify(d||{});document.documentElement.dataset.exportValidation=s;};
             const wait=ms=>new Promise(r=>setTimeout(r,ms));
-            async function blobImageSize(blob){
-              const bmp=await createImageBitmap(blob); const out=[bmp.width,bmp.height]; bmp.close(); return out;
+            async function bytesOf(blob){return new Uint8Array(await blob.arrayBuffer());}
+            async function pngSize(blob){
+              const b=await bytesOf(blob);
+              if(b.length<24||b[0]!==137||b[1]!==80||b[2]!==78||b[3]!==71) throw new Error('png_signature');
+              const dv=new DataView(b.buffer,b.byteOffset,b.byteLength); return [dv.getUint32(16),dv.getUint32(20)];
+            }
+            async function jpgSize(blob){
+              const b=await bytesOf(blob); if(b[0]!==0xFF||b[1]!==0xD8) throw new Error('jpg_signature');
+              let i=2;
+              while(i+8<b.length){
+                if(b[i]!==0xFF){i++;continue;}
+                const marker=b[i+1]; i+=2;
+                if(marker===0xD8||marker===0xD9) continue;
+                if(i+1>=b.length) break;
+                const len=(b[i]<<8)|b[i+1];
+                if([0xC0,0xC1,0xC2,0xC3,0xC5,0xC6,0xC7,0xC9,0xCA,0xCB,0xCD,0xCE,0xCF].includes(marker)){
+                  return [(b[i+5]<<8)|b[i+6],(b[i+3]<<8)|b[i+4]];
+                }
+                if(len<2) break; i+=len;
+              }
+              throw new Error('jpg_sof_missing');
             }
             async function blobHeader(blob,n){
               const b=new Uint8Array(await blob.slice(0,n).arrayBuffer()); return Array.from(b).map(x=>String.fromCharCode(x)).join('');
@@ -61,12 +81,13 @@ jobs:
             window.addEventListener('imeDicom:file-error',e=>finish('fail',{error:e.detail?.error||'file-error'}),{once:true});
             window.addEventListener('imeDicom:file-loaded',async e=>{
               try{
+                stage('loaded');
                 const f=e.detail.entry, ex=window.imeDicomExport, render=window.imeDicomRender;
                 if(!f||!ex||!render) throw new Error('missing_runtime');
                 f.annotations=f.annotations||[];
                 f.annotations.push({type:'arrow',x1:.15,y1:.20,x2:.70,y2:.65,color:'#FF3B30'});
                 const deps={windowToCanvas:render.windowToCanvas,drawOverlay:render.drawOverlay,drawAnnotations:render.drawAnnotations};
-                const c=ex.buildExportCanvas(f,2,deps);
+                const c=ex.buildExportCanvas(f,2,deps); stage('canvas');
                 if(c.width!==16||c.height!==12) throw new Error('export_canvas_dimensions_'+c.width+'x'+c.height);
                 const pix=c.getContext('2d').getImageData(0,0,c.width,c.height).data;
                 let mn=255,mx=0; for(let i=0;i<pix.length;i+=4){mn=Math.min(mn,pix[i]);mx=Math.max(mx,pix[i]);}
@@ -80,16 +101,16 @@ jobs:
 
                 const captured={};
                 const saver=kind=>async(blob,filename)=>{captured[kind]={blob,filename};return true;};
-                await ex.downloadCanvasAsPng(c,expectedName+'.png',saver('png'));
-                await ex.downloadCanvasAsJpg(c,expectedName+'.jpg',saver('jpg'));
+                await ex.downloadCanvasAsPng(c,expectedName+'.png',saver('png')); stage('png');
+                await ex.downloadCanvasAsJpg(c,expectedName+'.jpg',saver('jpg')); stage('jpg');
                 if(!captured.png||captured.png.filename!==expectedName+'.png'||captured.png.blob.type!=='image/png'||captured.png.blob.size<50) throw new Error('png_blob');
                 if(!captured.jpg||captured.jpg.filename!==expectedName+'.jpg'||captured.jpg.blob.type!=='image/jpeg'||captured.jpg.blob.size<50) throw new Error('jpg_blob');
-                const pngSize=await blobImageSize(captured.png.blob), jpgSize=await blobImageSize(captured.jpg.blob);
-                if(pngSize[0]!==16||pngSize[1]!==12) throw new Error('png_dimensions');
-                if(jpgSize[0]!==16||jpgSize[1]!==12) throw new Error('jpg_dimensions');
+                const pSize=await pngSize(captured.png.blob), jSize=await jpgSize(captured.jpg.blob); stage('image-headers');
+                if(pSize[0]!==16||pSize[1]!==12) throw new Error('png_dimensions_'+pSize);
+                if(jSize[0]!==16||jSize[1]!==12) throw new Error('jpg_dimensions_'+jSize);
 
                 if(window.__dvPdfFailed||!window.jspdf) throw new Error('jspdf_unavailable_in_normal_test');
-                await ex.downloadCanvasAsPdf(c,expectedName+'.pdf',saver('pdf'));
+                await ex.downloadCanvasAsPdf(c,expectedName+'.pdf',saver('pdf')); stage('pdf');
                 if(!captured.pdf||captured.pdf.filename!==expectedName+'.pdf'||captured.pdf.blob.size<100) throw new Error('pdf_blob');
                 const pdfHeader=await blobHeader(captured.pdf.blob,5);
                 if(pdfHeader!=='%PDF-') throw new Error('pdf_header_'+pdfHeader);
@@ -99,9 +120,10 @@ jobs:
                 try{await ex.downloadCanvasAsPdf(c,'blocked.pdf',saver('blocked'));}catch(err){fallbackError=err.message||String(err);}
                 window.__dvPdfFailed=prevFail;
                 if(!fallbackError.includes('generador de PDF')) throw new Error('pdf_fallback_not_controlled');
+                stage('fallback');
 
-                finish('pass',{canvas:[c.width,c.height],filename:built,png:{size:captured.png.blob.size,dimensions:pngSize},jpg:{size:captured.jpg.blob.size,dimensions:jpgSize},pdf:{size:captured.pdf.blob.size,header:pdfHeader},fallback:true});
-              }catch(err){finish('fail',{error:err.message});}
+                finish('pass',{canvas:[c.width,c.height],filename:built,png:{size:captured.png.blob.size,dimensions:pSize},jpg:{size:captured.jpg.blob.size,dimensions:jSize},pdf:{size:captured.pdf.blob.size,header:pdfHeader},fallback:true});
+              }catch(err){finish('fail',{stage:result.dataset.stage||'',error:err.message});}
             },{once:true});
             (async()=>{
               for(let i=0;i<120;i++){
