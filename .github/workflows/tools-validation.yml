@@ -65,7 +65,11 @@ jobs:
                 const btn=id=>{const b=document.getElementById(id);if(!b)throw new Error('missing_'+id);b.click();};
 
                 btn('dv-tool-arrow'); drag([.15,.20],[.75,.70]); await wait(30);
-                let arrow=f.annotations.find(a=>a.type==='arrow'); if(!arrow) throw new Error('arrow_create');
+                const arrow=f.annotations.find(a=>a.type==='arrow'); if(!arrow) throw new Error('arrow_create');
+                // El fixture mide solo 8x6: el radio de agarre mínimo (10 px),
+                // correcto para radiografías reales, cubriría toda la imagen. Aislamos
+                // las siguientes herramientas para no convertir ese detalle de CI en fallo.
+                f.annotations=[]; f.undoStack=[]; f.redoStack=[];
 
                 btn('dv-tool-length'); drag([.10,.50],[.60,.50]); await wait(30);
                 const length=f.annotations.find(a=>a.type==='length'); if(!length) throw new Error('length_create');
