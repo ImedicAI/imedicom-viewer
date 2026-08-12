@@ -7,6 +7,17 @@
     before.parentNode.insertBefore(label,before);
   }
 
+  function initPrivacyWarningToggle(){
+    const toggle=document.getElementById('dv-warn-toggle');
+    if(!toggle||toggle.dataset.premiumPrivacyToggleBound==='true') return;
+    toggle.dataset.premiumPrivacyToggleBound='true';
+    toggle.addEventListener('click',function(){
+      this.classList.toggle('dv-warn-expanded');
+      const chevron=this.querySelector('.dv-warn-chevron');
+      if(chevron) chevron.textContent=this.classList.contains('dv-warn-expanded')?'▴':'▾';
+    });
+  }
+
   function applyPremiumDom(){
     const empty=document.getElementById('dv-empty');
     if(empty){
@@ -25,7 +36,9 @@
       const view=document.getElementById('dv-view-opener');
       if(view) makeSectionLabel('Vista',view.closest('.dv-controls'));
     }
+
+    initPrivacyWarningToggle();
   }
 
-  window.imeDicomUi={applyPremiumDom};
+  window.imeDicomUi={applyPremiumDom,initPrivacyWarningToggle};
 })();
