@@ -9,6 +9,10 @@
   }
 
   function replaceInlineModules(sourceText){
+    if(sourceText.includes('Control de acceso (candado)')&&window.imeDicomAccess?.init){
+      return 'window.imeDicomAccess.init();';
+    }
+
     let text=sourceText;
     if(window.imeDicomCore?.dicomParser){
       const startMarker='  const dicomParser = {';
@@ -82,6 +86,7 @@
     if(!window.imeDicomExport) throw new Error('viewer-export.js no fue cargado');
     if(!window.imeDicomUi?.applyPremiumDom) throw new Error('viewer-ui.js no fue cargado');
     if(!window.imeDicomRuntime?.initFullscreen) throw new Error('viewer-runtime.js no fue cargado');
+    if(!window.imeDicomAccess?.init) throw new Error('viewer-access.js no fue cargado');
 
     const response=await fetch('viewer-source.html',{cache:'no-store'});
     if(!response.ok) throw new Error('HTTP '+response.status);
@@ -99,8 +104,8 @@
     mount.innerHTML=parsed.body.innerHTML;
     await executeScripts(scripts);
     window.imeDicomUi.applyPremiumDom();
-    document.documentElement.dataset.viewerIntegration='direct-dom-modular-source-ui-runtime-extracted';
-    console.info('imeDICOM: UI y runtime de pantalla completa separados; fuente transicional activa para estructura y runtime restante');
+    document.documentElement.dataset.viewerIntegration='direct-dom-modular-source-ui-runtime-access-extracted';
+    console.info('imeDICOM: UI, fullscreen y acceso separados; fuente transicional activa para estructura y runtime restante');
   }catch(err){
     console.error(err);
     mount.innerHTML='<div style="height:100%;display:grid;place-items:center;padding:32px;text-align:center;color:#d8e2e8;background:#061018"><div><div style="font-size:18px;font-weight:700;margin-bottom:8px">No se pudo inicializar el visor</div><div style="font-size:13px;color:#91a2af">Recarga la página. El respaldo legacy-viewer.html permanece intacto para recuperación manual.</div></div></div>';
