@@ -94,16 +94,34 @@ Lo que este paso SÍ demuestra:
 - El canvas obtiene las dimensiones correctas y contiene píxeles renderizados con variación tonal.
 - El estado vacío desaparece cuando una imagen queda activa.
 
-Lo que TODAVÍA NO demuestra:
+### Paso 2A — Motor WW/WL + inversión + geometría
 
-- Integridad con radiografías clínicas reales de diferentes equipos.
-- MONOCHROME1 en runtime.
-- WW/WL interactivo, presets, inversión, rotación y espejos.
-- PixelSpacing anisotrópico y precisión de Length.
-- Herramientas Flecha, Texto, Length, Ángulo y Cobb.
-- Exportación PNG/JPG/PDF con una imagen cargada.
-- Comportamiento en Edge, Safari/iPad o dispositivos táctiles reales.
-- Que `viewer-source.html` pueda eliminarse todavía.
+Estado: COMPLETADO A NIVEL DE MOTOR DE RENDER.
+
+Método:
+
+- Se reutiliza el mismo DICOM 8×6 cargado por el flujo real del visor.
+- Después de la carga, la prueba usa `viewer-render.js` sobre el mismo objeto `entry` y compara matrices de luminancia píxel por píxel.
+- No se considera suficiente que una función se ejecute: cada transformación debe producir la matriz esperada.
+
+Validado en corrida `31645275455`, commit `f0b30bf4de64f39ccd5866ed58795fa623467d08`:
+
+- Cambiar `windowCenter` modifica efectivamente la luminancia renderizada.
+- Cambiar `windowWidth` modifica efectivamente la distribución/contraste de píxeles.
+- `invert=true` sobre MONOCHROME2 produce, con tolerancia de cuantización de 1 nivel, `255 - valor_base`.
+- Rotación +90° intercambia 8×6 a 6×8 y la posición de cada píxel coincide con una rotación horaria exacta.
+- `flipH` refleja exactamente la matriz ya rotada de izquierda a derecha.
+- `flipV` refleja exactamente la matriz ya rotada de arriba a abajo.
+- MONOCHROME1 sin inversión de usuario produce la inversión esperada respecto de MONOCHROME2.
+- MONOCHROME1 + inversión de usuario revierte nuevamente a la matriz base, confirmando la lógica XOR existente.
+- El workflow completo terminó en `success`, incluyendo arranque normal, fallback sin jsPDF y pipeline DICOM controlado.
+
+Lo que el Paso 2A NO demuestra todavía:
+
+- Que los sliders visibles de WL/WW actualicen correctamente `entry.pixel.windowCenter/windowWidth` y redibujen el canvas.
+- Que los botones visibles Invertir, Rotar y Espejo estén correctamente conectados al estado activo.
+- Que Reset WW/WL restaure exactamente los valores iniciales.
+- Comportamiento de estos controles durante zoom/pan o con varios archivos activos.
 
 ## Dependencias residuales confirmadas
 
@@ -114,6 +132,6 @@ Lo que TODAVÍA NO demuestra:
 
 ## Siguiente fase
 
-Validación 4, paso 2 — WW/WL, inversión, rotación y espejos con resultados de píxel verificables sobre el fixture controlado.
+Validación 4, paso 2B — comprobar los controles UI reales de WL/WW, Reset, Invertir, Rotar y Espejos contra el DICOM controlado y verificar su efecto final en el canvas.
 
 Después: paso 3 de herramientas/mediciones, paso 4 de exportación y luego pruebas con DICOM clínicos reales antes de retirar `viewer-source.html`.
