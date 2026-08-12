@@ -2,23 +2,6 @@
   const mount=document.getElementById('viewerMount');
   if(!mount) return;
 
-  function applyPremiumDom(){
-    const empty=document.getElementById('dv-empty');
-    if(empty){
-      empty.innerHTML='<div class="premium-ring">⇧</div><div class="premium-title">Cargue un estudio DICOM</div><div class="premium-copy">Arrastra y suelta archivos DICOM aquí<br>o usa el botón de carga en el panel izquierdo.</div><button type="button" class="premium-demo" id="premium-demo">▱&nbsp; Abrir estudio de ejemplo</button>';
-      const demo=document.getElementById('premium-demo');
-      if(demo) demo.addEventListener('click',e=>{e.stopPropagation();const input=document.querySelector('input[type=file]');if(input)input.click()});
-    }
-    const tools=document.getElementById('dv-quad-herramientas');
-    if(tools){
-      const makeLabel=(text,before)=>{if(!before||before.previousElementSibling?.classList?.contains('premium-section'))return;const x=document.createElement('div');x.className='premium-section';x.textContent=text;before.parentNode.insertBefore(x,before)};
-      makeLabel('Marcadores',tools.querySelector('.dv-controls'));
-      const transform=document.getElementById('dv-transform-opener');if(transform)makeLabel('Transformar',transform.closest('.dv-controls'));
-      const arrow=document.getElementById('dv-tool-arrow');if(arrow)makeLabel('Medición y anotación',arrow.closest('.dv-controls'));
-      const bone=document.getElementById('dv-profile-bone');if(bone)makeLabel('Preset',bone.closest('.dv-controls'));
-    }
-  }
-
   function replaceFunctionBlock(text,startMarker,endMarker,replacement){
     const start=text.indexOf(startMarker),end=text.indexOf(endMarker,start);
     if(start<0||end<0)return text;
@@ -68,29 +51,46 @@
     for(const source of scripts){
       await new Promise(resolve=>{
         const s=document.createElement('script');
-        for(const a of source.attributes)if(a.name!=='src')s.setAttribute(a.name,a.value);
-        if(source.src){s.src=source.getAttribute('src');s.onload=resolve;s.onerror=()=>{console.warn('imeDICOM: no se pudo cargar',s.src);resolve();};document.body.appendChild(s);}
-        else{s.textContent=replaceInlineModules(source.textContent);document.body.appendChild(s);resolve();}
+        for(const a of source.attributes) if(a.name!=='src') s.setAttribute(a.name,a.value);
+        if(source.src){
+          s.src=source.getAttribute('src');
+          s.onload=resolve;
+          s.onerror=()=>{console.warn('imeDICOM: no se pudo cargar',s.src);resolve();};
+          document.body.appendChild(s);
+        }else{
+          s.textContent=replaceInlineModules(source.textContent);
+          document.body.appendChild(s);
+          resolve();
+        }
       });
     }
   }
 
   try{
-    if(!window.imeDicomCore?.dicomParser)throw new Error('dicom-core.js no fue cargado');
-    if(!window.imeDicomTools)throw new Error('viewer-tools.js no fue cargado');
-    if(!window.imeDicomRender)throw new Error('viewer-render.js no fue cargado');
-    if(!window.imeDicomExport)throw new Error('viewer-export.js no fue cargado');
+    if(!window.imeDicomCore?.dicomParser) throw new Error('dicom-core.js no fue cargado');
+    if(!window.imeDicomTools) throw new Error('viewer-tools.js no fue cargado');
+    if(!window.imeDicomRender) throw new Error('viewer-render.js no fue cargado');
+    if(!window.imeDicomExport) throw new Error('viewer-export.js no fue cargado');
+    if(!window.imeDicomUi?.applyPremiumDom) throw new Error('viewer-ui.js no fue cargado');
+
     const response=await fetch('viewer-source.html',{cache:'no-store'});
-    if(!response.ok)throw new Error('HTTP '+response.status);
+    if(!response.ok) throw new Error('HTTP '+response.status);
     const html=await response.text();
     const parsed=new DOMParser().parseFromString(html,'text/html');
-    const scripts=[...parsed.querySelectorAll('script')];scripts.forEach(s=>s.remove());
-    for(const node of [...parsed.head.querySelectorAll('style,link[rel="stylesheet"]')]){const clone=node.cloneNode(true);clone.dataset.viewerBaseStyle='true';document.head.appendChild(clone);}
+    const scripts=[...parsed.querySelectorAll('script')];
+    scripts.forEach(s=>s.remove());
+
+    for(const node of [...parsed.head.querySelectorAll('style,link[rel="stylesheet"]')]){
+      const clone=node.cloneNode(true);
+      clone.dataset.viewerBaseStyle='true';
+      document.head.appendChild(clone);
+    }
+
     mount.innerHTML=parsed.body.innerHTML;
     await executeScripts(scripts);
-    applyPremiumDom();
-    document.documentElement.dataset.viewerIntegration='direct-dom-modular-source';
-    console.info('imeDICOM: visor desacoplado de legacy-viewer.html; fuente transicional viewer-source.html');
+    window.imeDicomUi.applyPremiumDom();
+    document.documentElement.dataset.viewerIntegration='direct-dom-modular-source-ui-extracted';
+    console.info('imeDICOM: UI premium separada; fuente transicional activa para estructura y runtime restante');
   }catch(err){
     console.error(err);
     mount.innerHTML='<div style="height:100%;display:grid;place-items:center;padding:32px;text-align:center;color:#d8e2e8;background:#061018"><div><div style="font-size:18px;font-weight:700;margin-bottom:8px">No se pudo inicializar el visor</div><div style="font-size:13px;color:#91a2af">Recarga la página. El respaldo legacy-viewer.html permanece intacto para recuperación manual.</div></div></div>';
