@@ -1,0 +1,170 @@
+name: UI controls validation
+
+on:
+  push:
+    branches:
+      - redesign/radiology-dark-premium
+  workflow_dispatch:
+
+jobs:
+  ui-controls:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find Chromium
+        id: browser
+        shell: bash
+        run: |
+          set -e
+          for b in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then
+              echo "bin=$(command -v "$b")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          exit 1
+
+      - name: Build DICOM fixture and UI harness
+        shell: bash
+        run: |
+          mkdir -p tests
+          python3 - <<'PY'
+          import struct, pathlib
+          out = bytearray(128) + b'DICM'
+          def even(data,pad=b' '): return data if len(data)%2==0 else data+pad
+          def elem(g,e,vr,v):
+              global out
+              if isinstance(v,str): v=even(v.encode('ascii'), b'\x00' if vr=='UI' else b' ')
+              elif isinstance(v,int): v=struct.pack('<H',v)
+              if vr in ('OB','OW','OF','SQ','UT','UN','OD','OL','UC','UR'):
+                  out.extend(struct.pack('<HH2sH',g,e,vr.encode(),0)); out.extend(struct.pack('<I',len(v)))
+              else: out.extend(struct.pack('<HH2sH',g,e,vr.encode(),len(v)))
+              out.extend(v)
+          elem(0x0002,0x0010,'UI','1.2.840.10008.1.2.1')
+          elem(0x0008,0x0060,'CS','DX'); elem(0x0008,0x0020,'DA','20260812'); elem(0x0008,0x0030,'TM','153000')
+          elem(0x0010,0x0010,'PN','CONTROL^PATIENT'); elem(0x0010,0x0020,'LO','TEST-UI-001')
+          elem(0x0018,0x0015,'CS','CHEST'); elem(0x0018,0x5101,'CS','AP')
+          elem(0x0028,0x0002,'US',1); elem(0x0028,0x0004,'CS','MONOCHROME2')
+          elem(0x0028,0x0010,'US',6); elem(0x0028,0x0011,'US',8); elem(0x0028,0x0030,'DS','0.20\\0.20')
+          elem(0x0028,0x0100,'US',8); elem(0x0028,0x0101,'US',8); elem(0x0028,0x0102,'US',7); elem(0x0028,0x0103,'US',0)
+          elem(0x0028,0x1050,'DS','128'); elem(0x0028,0x1051,'DS','256'); elem(0x0028,0x1052,'DS','0'); elem(0x0028,0x1053,'DS','1')
+          pixels=bytes([0,16,32,48,64,80,96,112,32,48,64,80,96,112,128,144,64,80,96,112,128,144,160,176,96,112,128,144,160,176,192,208,128,144,160,176,192,208,224,240,144,160,176,192,208,224,240,255])
+          elem(0x7FE0,0x0010,'OB',pixels)
+          pathlib.Path('tests/ui-controlled.dcm').write_bytes(out)
+          PY
+
+          cat > tests/ui-controls-test.js <<'JS'
+          (function(){
+            const result=document.createElement('div'); result.id='ime-ui-controls-result'; result.style.display='none'; document.body.appendChild(result);
+            function finish(status,detail){ result.dataset.status=status; result.textContent=JSON.stringify(detail||{}); document.documentElement.dataset.uiControls=status; }
+            function checksum(canvas){
+              const d=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
+              let sum=0,weighted=0,min=255,max=0;
+              for(let i=0,p=0;i<d.length;i+=4,p++){const v=d[i];sum+=v;weighted+=v*(p+1);min=Math.min(min,v);max=Math.max(max,v);}
+              return {sum,weighted,min,max,w:canvas.width,h:canvas.height};
+            }
+            function input(el,value){el.value=String(value);el.dispatchEvent(new Event('input',{bubbles:true}));}
+            function click(id){const el=document.getElementById(id);if(!el)throw new Error('missing_'+id);el.click();return el;}
+            window.addEventListener('imeDicom:file-error',e=>finish('fail',{error:e.detail&&e.detail.error||'file-error'}),{once:true});
+            window.addEventListener('imeDicom:file-loaded',e=>{
+              try{
+                const entry=e.detail.entry, canvas=document.getElementById('dv-canvas');
+                const wl=document.getElementById('dv-wl'),ww=document.getElementById('dv-ww');
+                const wlVal=document.getElementById('dv-wl-val'),wwVal=document.getElementById('dv-ww-val');
+                if(!entry||!canvas||!wl||!ww||!wlVal||!wwVal)throw new Error('missing_core_controls');
+                const originalWC=entry.pixel.origWindowCenter, originalWW=entry.pixel.origWindowWidth;
+                const base=checksum(canvas);
+
+                const newWL=Math.min(Number(wl.max),Math.max(Number(wl.min),Math.round(originalWC+25)));
+                input(wl,newWL);
+                if(Math.round(entry.pixel.windowCenter)!==Math.round(newWL))throw new Error('wl_state_not_updated');
+                if(wlVal.textContent.trim()!==String(Math.round(newWL)))throw new Error('wl_label_not_updated');
+                const wlC=checksum(canvas); if(wlC.weighted===base.weighted)throw new Error('wl_canvas_not_updated');
+
+                const newWW=Math.max(1,Math.min(Number(ww.max),Math.round(originalWW*0.6)));
+                input(ww,newWW);
+                if(Math.round(entry.pixel.windowWidth)!==Math.round(newWW))throw new Error('ww_state_not_updated');
+                if(wwVal.textContent.trim()!==String(Math.round(newWW)))throw new Error('ww_label_not_updated');
+                const wwC=checksum(canvas); if(wwC.weighted===wlC.weighted)throw new Error('ww_canvas_not_updated');
+
+                click('dv-wlww-reset');
+                if(Math.abs(entry.pixel.windowCenter-originalWC)>0.001||Math.abs(entry.pixel.windowWidth-originalWW)>0.001)throw new Error('wlww_reset_state');
+
+                const invBtn=click('dv-invert');
+                if(entry.invert!==true||!invBtn.classList.contains('dv-tool-active'))throw new Error('invert_on_state');
+                const invC=checksum(canvas); if(invC.weighted===base.weighted)throw new Error('invert_canvas_not_updated');
+                click('dv-invert');
+                if(entry.invert!==false||invBtn.classList.contains('dv-tool-active'))throw new Error('invert_off_state');
+
+                click('dv-rotate-left');
+                if(entry.rotation!==90||canvas.width!==6||canvas.height!==8)throw new Error('rotate_left');
+                click('dv-rotate-right');
+                if(entry.rotation!==0||canvas.width!==8||canvas.height!==6)throw new Error('rotate_right');
+
+                click('dv-flip-h'); if(entry.flipH!==true)throw new Error('flip_h_on');
+                const fh=checksum(canvas); if(fh.weighted===base.weighted)throw new Error('flip_h_canvas');
+                click('dv-flip-v'); if(entry.flipV!==true)throw new Error('flip_v_on');
+                const fhv=checksum(canvas); if(fhv.weighted===fh.weighted)throw new Error('flip_v_canvas');
+
+                click('dv-rotate-180'); if(entry.rotation!==180)throw new Error('rotate_180');
+                click('dv-clear-transforms');
+                if(entry.rotation!==0||entry.flipH||entry.flipV)throw new Error('clear_transforms_state');
+                if(canvas.width!==8||canvas.height!==6)throw new Error('clear_transforms_canvas_dimensions');
+
+                finish('pass',{wl:true,ww:true,reset:true,invert:true,rotateLeft:true,rotateRight:true,flipH:true,flipV:true,rotate180:true,clearTransforms:true,base,wlC,wwC,invC});
+              }catch(err){finish('fail',{error:err.message});}
+            },{once:true});
+            async function start(){
+              for(let i=0;i<120;i++){
+                const inputEl=document.getElementById('dv-file-input');
+                if(inputEl&&document.documentElement.dataset.viewerIntegration){
+                  try{const r=await fetch('tests/ui-controlled.dcm',{cache:'no-store'});const b=await r.blob();const f=new File([b],'ui-controlled.dcm',{type:'application/dicom'});const dt=new DataTransfer();dt.items.add(f);inputEl.files=dt.files;inputEl.dispatchEvent(new Event('change',{bubbles:true}));return;}catch(err){finish('fail',{error:err.message});return;}
+                }
+                await new Promise(r=>setTimeout(r,100));
+              }
+              finish('fail',{error:'viewer_not_ready'});
+            }
+            start();
+          })();
+          JS
+
+          python3 - <<'PY'
+          from pathlib import Path
+          h=Path('index.html').read_text(); h=h.replace('</body>','<script src="tests/ui-controls-test.js"></script>\n</body>'); Path('ui-controls-test.html').write_text(h)
+          PY
+
+      - name: Start local server
+        run: |
+          python3 -m http.server 8080 >server-ui.log 2>&1 &
+          sleep 2
+
+      - name: Exercise visible controls
+        shell: bash
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        run: |
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --virtual-time-budget=16000 --enable-logging=stderr --v=0 \
+            --dump-dom http://127.0.0.1:8080/ui-controls-test.html > dom-ui-controls.html 2> chrome-ui-controls.log || true
+          grep -q 'data-ui-controls="pass"' dom-ui-controls.html
+          grep -q '"wl":true' dom-ui-controls.html
+          grep -q '"invert":true' dom-ui-controls.html
+          grep -q '"rotateLeft":true' dom-ui-controls.html
+          grep -q '"clearTransforms":true' dom-ui-controls.html
+          if grep -q 'data-ui-controls="fail"' dom-ui-controls.html; then
+            grep 'ime-ui-controls-result' dom-ui-controls.html >&2 || true
+            exit 1
+          fi
+
+      - name: Upload UI evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-controls-validation
+          path: |
+            dom-ui-controls.html
+            chrome-ui-controls.log
+            server-ui.log
+            tests/ui-controlled.dcm
