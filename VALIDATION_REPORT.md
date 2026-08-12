@@ -62,12 +62,46 @@ Lo que esta validación SÍ demuestra:
 - El loader completa su integración modular sin caer en el estado fatal.
 - La ausencia de jsPDF no impide el arranque base.
 
-Lo que esta validación TODAVÍA NO demuestra:
+## Validación 4 — Prueba funcional DICOM
 
-- Carga y render correcto de un DICOM real.
-- Integridad diagnóstica de WW/WL, MONOCHROME1, orientación/lateralidad o PixelSpacing con archivos reales.
-- Interacción real de zoom, pan, WW/WL, flecha, texto, Length, Ángulo y Cobb.
-- Exportación PNG/JPG/PDF con una imagen real.
+### Paso 1 — Carga + metadata + render básico
+
+Estado: COMPLETADO CON DICOM SINTÉTICO CONTROLADO.
+
+Método:
+
+- El workflow genera en cada corrida un DICOM válido Explicit VR Little Endian, sin compresión, monocromo 8-bit, de 8×6 píxeles.
+- El fixture contiene identidad, fecha/hora, modalidad DX, BodyPartExamined=CHEST, ViewPosition=AP, PixelSpacing 0.20\\0.20, WW/WL y un gradiente conocido de píxeles.
+- La carga se realiza a través del `<input type=file>` real del visor usando `DataTransfer`; no se invoca el parser directamente desde la prueba.
+- `viewer-load.js` emite eventos de ciclo de vida `imeDicom:file-loaded` / `imeDicom:file-error` para observabilidad sin alterar el flujo clínico.
+- La prueba comprueba metadata, Rows/Columns, PixelSpacing, dimensiones del canvas, visibilidad del canvas, ausencia del estado vacío y que el canvas contenga niveles de gris no uniformes.
+
+Hallazgo y corrección:
+
+1. Primera corrida funcional (`31644729676`) falló únicamente en `empty_state_visible`.
+2. Parser, metadata, dimensiones, PixelSpacing y render de píxeles ya habían pasado en esa corrida.
+3. La causa era CSS: `#dv-empty{display:flex!important}` anulaba `emptyEl.style.display='none'` ejecutado por `draw()`.
+4. Se retiró `!important` únicamente de `display` en `#dv-empty`, preservando el diseño del estado vacío pero permitiendo ocultarlo al cargar una imagen.
+5. La corrida siguiente (`31644819199`, commit `29594d3059d4ed713467693868a61e2ec0e85247`) terminó con `success` en `Normal startup`, `Startup with jsPDF CDN blocked` y `Controlled DICOM load and render`.
+
+Lo que este paso SÍ demuestra:
+
+- El flujo normal de selección de archivo llega a `viewer-load.js`.
+- El parser modular procesa un DICOM no comprimido Explicit VR Little Endian.
+- `extractMeta()` devuelve correctamente los campos controlados probados.
+- `extractPixel()` devuelve dimensiones y PixelSpacing correctos para el fixture.
+- La selección automática dispara el render.
+- El canvas obtiene las dimensiones correctas y contiene píxeles renderizados con variación tonal.
+- El estado vacío desaparece cuando una imagen queda activa.
+
+Lo que TODAVÍA NO demuestra:
+
+- Integridad con radiografías clínicas reales de diferentes equipos.
+- MONOCHROME1 en runtime.
+- WW/WL interactivo, presets, inversión, rotación y espejos.
+- PixelSpacing anisotrópico y precisión de Length.
+- Herramientas Flecha, Texto, Length, Ángulo y Cobb.
+- Exportación PNG/JPG/PDF con una imagen cargada.
 - Comportamiento en Edge, Safari/iPad o dispositivos táctiles reales.
 - Que `viewer-source.html` pueda eliminarse todavía.
 
@@ -80,6 +114,6 @@ Lo que esta validación TODAVÍA NO demuestra:
 
 ## Siguiente fase
 
-Validación 4 — prueba funcional con DICOM real/sintético controlado: carga, render, metadata, WW/WL, transformaciones y luego herramientas/anotaciones/exportación.
+Validación 4, paso 2 — WW/WL, inversión, rotación y espejos con resultados de píxel verificables sobre el fixture controlado.
 
-Solo después de superar esa fase debe plantearse la retirada definitiva de `viewer-source.html`.
+Después: paso 3 de herramientas/mediciones, paso 4 de exportación y luego pruebas con DICOM clínicos reales antes de retirar `viewer-source.html`.
