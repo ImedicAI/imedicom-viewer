@@ -29,15 +29,31 @@
     }
   }
 
-  function replaceInlineCore(sourceText){
-    if(!window.imeDicomCore?.dicomParser) return sourceText;
-    const startMarker='  const dicomParser = {';
-    const endMarker='\n  };\n\n  const state = { files: [], activeIndex: -1 };';
-    const start=sourceText.indexOf(startMarker);
-    const end=sourceText.indexOf(endMarker,start);
-    if(start<0 || end<0) return sourceText;
-    const replacement='  const dicomParser = window.imeDicomCore.dicomParser;\n\n  const state = { files: [], activeIndex: -1 };';
-    return sourceText.slice(0,start)+replacement+sourceText.slice(end+endMarker.length);
+  function replaceInlineModules(sourceText){
+    let text=sourceText;
+
+    if(window.imeDicomCore?.dicomParser){
+      const startMarker='  const dicomParser = {';
+      const endMarker='\n  };\n\n  const state = { files: [], activeIndex: -1 };';
+      const start=text.indexOf(startMarker);
+      const end=text.indexOf(endMarker,start);
+      if(start>=0 && end>=0){
+        const replacement='  const dicomParser = window.imeDicomCore.dicomParser;\n\n  const state = { files: [], activeIndex: -1 };';
+        text=text.slice(0,start)+replacement+text.slice(end+endMarker.length);
+      }
+    }
+
+    if(window.imeDicomTools){
+      // La gestión de snapshots de anotaciones ya vive en viewer-tools.js.
+      text=text.replace(/\bpushUndo\(f\);/g,'window.imeDicomTools.pushUndo(f);');
+
+      // Los cálculos geométricos de medición se resuelven desde el módulo externo.
+      text=text.replace(/const angleDeg = angleAtVertex\(/g,'const angleDeg = window.imeDicomTools.angleAtVertex(');
+      text=text.replace(/const cobbDeg = cobbAngleBetweenLines\(/g,'const cobbDeg = window.imeDicomTools.cobbAngleBetweenLines(');
+      text=text.replace(/const labelPos = angleBisectorLabelPos\(/g,'const labelPos = window.imeDicomTools.angleBisectorLabelPos(');
+    }
+
+    return text;
   }
 
   async function executeScripts(scripts){
@@ -53,7 +69,7 @@
           s.onerror=()=>{console.warn('imeDICOM: no se pudo cargar',s.src);resolve();};
           document.body.appendChild(s);
         }else{
-          s.textContent=replaceInlineCore(source.textContent);
+          s.textContent=replaceInlineModules(source.textContent);
           document.body.appendChild(s);
           resolve();
         }
@@ -63,6 +79,7 @@
 
   try{
     if(!window.imeDicomCore?.dicomParser) throw new Error('dicom-core.js no fue cargado');
+    if(!window.imeDicomTools) throw new Error('viewer-tools.js no fue cargado');
 
     const response=await fetch('legacy-viewer.html',{cache:'no-store'});
     if(!response.ok) throw new Error('HTTP '+response.status);
@@ -80,8 +97,8 @@
     mount.innerHTML=parsed.body.innerHTML;
     await executeScripts(scripts);
     applyPremiumDom();
-    document.documentElement.dataset.viewerIntegration='direct-dom-core-extracted';
-    console.info('imeDICOM: DOM directo con parser DICOM externo');
+    document.documentElement.dataset.viewerIntegration='direct-dom-core-tools-extracted';
+    console.info('imeDICOM: parser y helpers de herramientas/medición externos');
   }catch(err){
     console.error(err);
     mount.innerHTML='<div style="height:100%;display:grid;place-items:center;padding:32px;text-align:center;color:#d8e2e8;background:#061018"><div><div style="font-size:18px;font-weight:700;margin-bottom:8px">No se pudo inicializar el visor</div><div style="font-size:13px;color:#91a2af">Recarga la página. La versión de respaldo permanece disponible en legacy-viewer.html.</div></div></div>';
