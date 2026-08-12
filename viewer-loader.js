@@ -19,6 +19,9 @@
       return 'window.imeDicomAccess.init();';
     }
 
+    const isMainViewerScript=sourceText.includes('const dicomParser = {')&&sourceText.includes('const state = { files: [], activeIndex: -1 }');
+    if(!isMainViewerScript) return sourceText;
+
     let text=sourceText;
     if(window.imeDicomCore?.dicomParser){
       const startMarker='  const dicomParser = {';
