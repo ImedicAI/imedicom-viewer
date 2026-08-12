@@ -27,6 +27,159 @@ jobs:
           echo "No Chromium/Chrome binary found" >&2
           exit 1
 
+      - name: Build controlled DICOM fixture and functional harness
+        shell: bash
+        run: |
+          mkdir -p tests
+          python3 - <<'PY'
+          import struct, pathlib
+
+          out = bytearray(128) + b'DICM'
+
+          def pad_even(data, pad=b' '):
+              return data if len(data) % 2 == 0 else data + pad
+
+          def elem(group, element, vr, value):
+              global out
+              if isinstance(value, str):
+                  enc = value.encode('ascii')
+                  pad = b'\x00' if vr == 'UI' else b' '
+                  value = pad_even(enc, pad)
+              elif isinstance(value, int):
+                  value = struct.pack('<H', value)
+              if vr in ('OB','OW','OF','SQ','UT','UN','OD','OL','UC','UR'):
+                  out.extend(struct.pack('<HH2sH', group, element, vr.encode('ascii'), 0))
+                  out.extend(struct.pack('<I', len(value)))
+              else:
+                  out.extend(struct.pack('<HH2sH', group, element, vr.encode('ascii'), len(value)))
+              out.extend(value)
+
+          # File Meta Information — Explicit VR Little Endian
+          elem(0x0002,0x0010,'UI','1.2.840.10008.1.2.1')
+
+          # Identidad / estudio controlados
+          elem(0x0008,0x0020,'DA','20260812')
+          elem(0x0008,0x0030,'TM','153000')
+          elem(0x0008,0x0060,'CS','DX')
+          elem(0x0008,0x0080,'LO','IMEDICA TEST')
+          elem(0x0008,0x1030,'LO','CHEST AP CONTROLLED')
+          elem(0x0010,0x0010,'PN','CONTROL^PATIENT')
+          elem(0x0010,0x0020,'LO','TEST-001')
+          elem(0x0010,0x0030,'DA','19800101')
+          elem(0x0018,0x0015,'CS','CHEST')
+          elem(0x0018,0x5101,'CS','AP')
+
+          # Imagen monocroma 8x6, 8 bits, sin compresión
+          rows, cols = 6, 8
+          elem(0x0028,0x0002,'US',1)
+          elem(0x0028,0x0004,'CS','MONOCHROME2')
+          elem(0x0028,0x0010,'US',rows)
+          elem(0x0028,0x0011,'US',cols)
+          elem(0x0028,0x0030,'DS','0.20\\0.20')
+          elem(0x0028,0x0100,'US',8)
+          elem(0x0028,0x0101,'US',8)
+          elem(0x0028,0x0102,'US',7)
+          elem(0x0028,0x0103,'US',0)
+          elem(0x0028,0x1050,'DS','128')
+          elem(0x0028,0x1051,'DS','256')
+          elem(0x0028,0x1052,'DS','0')
+          elem(0x0028,0x1053,'DS','1')
+
+          # Gradiente determinista: contiene negro, grises y blanco.
+          pixels = bytes([0,16,32,48,64,80,96,112,
+                          32,48,64,80,96,112,128,144,
+                          64,80,96,112,128,144,160,176,
+                          96,112,128,144,160,176,192,208,
+                          128,144,160,176,192,208,224,240,
+                          144,160,176,192,208,224,240,255])
+          elem(0x7FE0,0x0010,'OB',pixels)
+          pathlib.Path('tests/controlled.dcm').write_bytes(out)
+          print('fixture bytes:', len(out))
+          PY
+
+          cat > tests/functional-test.js <<'JS'
+          (function(){
+            const result=document.createElement('div');
+            result.id='ime-functional-result';
+            result.style.display='none';
+            document.body.appendChild(result);
+
+            function finish(status,detail){
+              result.dataset.status=status;
+              result.textContent=JSON.stringify(detail||{});
+              document.documentElement.dataset.dicomFunctional=status;
+            }
+
+            window.addEventListener('imeDicom:file-error',e=>{
+              finish('fail',{error:e.detail&&e.detail.error||'file-error'});
+            },{once:true});
+
+            window.addEventListener('imeDicom:file-loaded',e=>{
+              try{
+                const entry=e.detail.entry;
+                const canvas=document.getElementById('dv-canvas');
+                if(!entry||entry.status!=='ok') throw new Error('entry_not_ok');
+                if(!entry.meta||entry.meta.patientName!=='CONTROL PATIENT') throw new Error('patient_name');
+                if(entry.meta.patientId!=='TEST-001') throw new Error('patient_id');
+                if(entry.meta.modality!=='DX') throw new Error('modality');
+                if(entry.meta.viewPosition!=='AP'||entry.meta.isFrontal!==true) throw new Error('view');
+                if(!entry.meta.isChestBodyPart) throw new Error('body_part');
+                if(!entry.pixel||entry.pixel.rows!==6||entry.pixel.cols!==8) throw new Error('dimensions');
+                if(Math.abs(entry.pixel.mmPerPixel-0.20)>0.0001) throw new Error('pixel_spacing');
+                if(!canvas||canvas.width!==8||canvas.height!==6) throw new Error('canvas_dimensions');
+                if(canvas.style.display==='none') throw new Error('canvas_hidden');
+                const ctx=canvas.getContext('2d');
+                const data=ctx.getImageData(0,0,canvas.width,canvas.height).data;
+                let min=255,max=0,sum=0;
+                for(let i=0;i<data.length;i+=4){min=Math.min(min,data[i]);max=Math.max(max,data[i]);sum+=data[i];}
+                if(!(max>min&&sum>0)) throw new Error('render_pixels');
+                const empty=document.getElementById('dv-empty');
+                if(empty&&getComputedStyle(empty).display!=='none') throw new Error('empty_state_visible');
+                finish('pass',{
+                  patient:entry.meta.patientName,
+                  id:entry.meta.patientId,
+                  modality:entry.meta.modality,
+                  view:entry.meta.viewPosition,
+                  rows:entry.pixel.rows,
+                  cols:entry.pixel.cols,
+                  mmPerPixel:entry.pixel.mmPerPixel,
+                  canvas:[canvas.width,canvas.height],
+                  grayMin:min,grayMax:max,graySum:sum
+                });
+              }catch(err){finish('fail',{error:err.message});}
+            },{once:true});
+
+            async function start(){
+              for(let i=0;i<120;i++){
+                const input=document.getElementById('dv-file-input');
+                if(input&&document.documentElement.dataset.viewerIntegration){
+                  try{
+                    const resp=await fetch('tests/controlled.dcm',{cache:'no-store'});
+                    if(!resp.ok) throw new Error('fixture_http_'+resp.status);
+                    const blob=await resp.blob();
+                    const file=new File([blob],'controlled.dcm',{type:'application/dicom'});
+                    const dt=new DataTransfer();
+                    dt.items.add(file);
+                    input.files=dt.files;
+                    input.dispatchEvent(new Event('change',{bubbles:true}));
+                    return;
+                  }catch(err){finish('fail',{error:err.message});return;}
+                }
+                await new Promise(r=>setTimeout(r,100));
+              }
+              finish('fail',{error:'viewer_not_ready'});
+            }
+            start();
+          })();
+          JS
+
+          python3 - <<'PY'
+          from pathlib import Path
+          html=Path('index.html').read_text()
+          html=html.replace('</body>','<script src="tests/functional-test.js"></script>\n</body>')
+          Path('functional-test.html').write_text(html)
+          PY
+
       - name: Start local server
         shell: bash
         run: |
@@ -72,6 +225,26 @@ jobs:
             exit 1
           fi
 
+      - name: Controlled DICOM load and render
+        shell: bash
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -o pipefail
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --virtual-time-budget=15000 --enable-logging=stderr --v=0 \
+            --dump-dom http://127.0.0.1:8080/functional-test.html > dom-functional.html 2> chrome-functional.log || true
+
+          grep -q 'data-dicom-functional="pass"' dom-functional.html
+          grep -q 'id="ime-functional-result"' dom-functional.html
+          grep -q 'CONTROL PATIENT' dom-functional.html
+          grep -q 'TEST-001' dom-functional.html
+          if grep -q 'data-dicom-functional="fail"' dom-functional.html; then
+            echo "Controlled DICOM functional test failed" >&2
+            grep 'ime-functional-result' dom-functional.html >&2 || true
+            exit 1
+          fi
+
       - name: Upload runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -80,6 +253,9 @@ jobs:
           path: |
             dom-normal.html
             dom-no-jspdf.html
+            dom-functional.html
             chrome-normal.log
             chrome-no-jspdf.log
+            chrome-functional.log
             server.log
+            tests/controlled.dcm
