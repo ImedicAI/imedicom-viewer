@@ -1,0 +1,121 @@
+name: Regression validation
+
+on:
+  push:
+    branches: [redesign/radiology-dark-premium]
+  workflow_dispatch:
+
+jobs:
+  regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find Chromium
+        id: browser
+        shell: bash
+        run: |
+          for b in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then echo "bin=$(command -v "$b")" >> "$GITHUB_OUTPUT"; exit 0; fi
+          done
+          exit 1
+      - name: Build regression harness
+        shell: bash
+        run: |
+          mkdir -p tests
+          cat > tests/regression-test.js <<'JS'
+          (function(){
+            const result=document.createElement('div');
+            result.id='ime-regression-result';
+            result.style.display='none';
+            document.body.appendChild(result);
+            const finish=(status,detail)=>{
+              result.dataset.status=status;
+              result.textContent=JSON.stringify(detail||{});
+              document.documentElement.dataset.regressionValidation=status;
+            };
+            const wait=ms=>new Promise(r=>setTimeout(r,ms));
+            (async()=>{
+              try{
+                for(let i=0;i<120;i++){
+                  if(document.documentElement.dataset.viewerIntegration) break;
+                  await wait(100);
+                }
+                if(!document.documentElement.dataset.viewerIntegration) throw new Error('viewer_not_ready');
+
+                const root=document.getElementById('dv-root');
+                const lock=document.getElementById('dv-lock-screen');
+                const fs=document.getElementById('dv-fullscreen-controls');
+                if(!root||!lock||!fs) throw new Error('missing_access_dom');
+                if(!root.classList.contains('dv-locked')) throw new Error('root_not_locked_initially');
+                if(lock.classList.contains('dv-hidden')) throw new Error('lock_hidden_initially');
+                if(fs.classList.contains('dv-show')) throw new Error('fullscreen_visible_while_locked');
+
+                if(!window.imeDicomRuntime || typeof window.imeDicomRuntime.requestFullscreen!=='function') throw new Error('runtime_fullscreen_missing');
+                if(!window.imeDicomAccess || typeof window.imeDicomAccess.init!=='function') throw new Error('access_runtime_missing');
+
+                const warn=document.getElementById('dv-warn-toggle');
+                if(!warn) throw new Error('privacy_toggle_missing');
+                const chevron=warn.querySelector('.dv-warn-chevron');
+                const initialExpanded=warn.classList.contains('dv-warn-expanded');
+                warn.click();
+                const afterFirst=warn.classList.contains('dv-warn-expanded');
+                if(afterFirst===initialExpanded) throw new Error('privacy_toggle_no_change');
+                if(chevron){
+                  const expected=afterFirst?'▴':'▾';
+                  if(chevron.textContent!==expected) throw new Error('privacy_chevron_first_'+chevron.textContent);
+                }
+                warn.click();
+                if(warn.classList.contains('dv-warn-expanded')!==initialExpanded) throw new Error('privacy_toggle_not_reversible');
+                if(chevron){
+                  const expected=initialExpanded?'▴':'▾';
+                  if(chevron.textContent!==expected) throw new Error('privacy_chevron_second_'+chevron.textContent);
+                }
+
+                const input=document.getElementById('dv-lock-input');
+                const button=document.getElementById('dv-lock-btn');
+                const msg=document.getElementById('dv-lock-msg');
+                if(!input||!button||!msg) throw new Error('lock_controls_missing');
+                input.value='';
+                button.click();
+                await wait(20);
+                if(!root.classList.contains('dv-locked')) throw new Error('empty_code_unlocked');
+                if(!msg.textContent.includes('Ingresá un código.')) throw new Error('empty_code_message_'+msg.textContent);
+
+                finish('pass',{
+                  lockedInitial:true,
+                  fullscreenHiddenWhileLocked:true,
+                  runtimeFullscreen:true,
+                  privacyToggle:true,
+                  privacyReversible:true,
+                  emptyCodeStaysLocked:true
+                });
+              }catch(err){finish('fail',{error:err.message});}
+            })();
+          })();
+          JS
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('index.html').read_text()
+          Path('regression-test.html').write_text(s.replace('</body>','<script src="tests/regression-test.js"></script>\n</body>'))
+          PY
+      - name: Start server
+        run: python3 -m http.server 8080 >server.log 2>&1 &
+      - name: Exercise regressions
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        shell: bash
+        run: |
+          sleep 2
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=12000 --dump-dom http://127.0.0.1:8080/regression-test.html > dom-regression.html 2> chrome-regression.log || true
+          grep -q 'data-regression-validation="pass"' dom-regression.html
+          grep -q '"privacyToggle":true' dom-regression.html
+          grep -q '"emptyCodeStaysLocked":true' dom-regression.html
+          if grep -q 'data-regression-validation="fail"' dom-regression.html; then grep 'ime-regression-result' dom-regression.html >&2 || true; exit 1; fi
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: regression-validation
+          path: |
+            dom-regression.html
+            chrome-regression.log
