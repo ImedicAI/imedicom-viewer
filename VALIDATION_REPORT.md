@@ -21,7 +21,7 @@ Comprobado:
 
 ## Validación 2 — Integridad JavaScript y dependencias residuales
 
-Estado: COMPLETADA A NIVEL DE CÓDIGO / PENDIENTE PRUEBA EN NAVEGADOR.
+Estado: COMPLETADA A NIVEL DE CÓDIGO.
 
 Comprobado y corregido:
 
@@ -29,29 +29,57 @@ Comprobado y corregido:
 - Se corrigió una declaración duplicada de `const dropEl` que podía producir `SyntaxError` después de sustituir el bloque de fullscreen.
 - Se corrigió la reinserción duplicada del marcador `const FIXED_FONT` al sustituir `canvasFraction()`.
 - `replaceFunctionBlock()` ahora falla explícitamente si no encuentra un bloque obligatorio; ya no deja silenciosamente una mezcla parcial de código legado y modular.
-- Se añadió un registro de sustituciones (`replacementAudit`) para facilitar la comprobación del runtime durante las pruebas de navegador.
+- Se añadió un registro de sustituciones (`replacementAudit`) para facilitar la comprobación del runtime.
 - Se verificó que `viewer-load.js` recibe `extractMeta()` y `extractPixel()` como dependencias y no reimplementa esas reglas.
 - Se verificó que `viewer-viewport.js` comunica los cambios de zoom al runtime residual y la supresión del borrado contextual después de pan/WW-WL.
 - Se restauró en `viewer-tools.js` el comportamiento legado para la etiqueta de ángulos cercanos a 180°, usando la perpendicular de respaldo cuando la bisectriz es inestable.
-- Se corrigió el tratamiento de `jsPDF`: si su CDN falla, se marca `window.__dvPdfFailed` y el visor continúa con PNG/JPG, como estaba previsto originalmente; una dependencia externa sin fallback sí aborta la inicialización.
+- Se corrigió el tratamiento de `jsPDF`: si su CDN falla, se marca `window.__dvPdfFailed` y el visor continúa con PNG/JPG; una dependencia externa sin fallback sí aborta la inicialización.
 - El render modular conserva el pipeline existente de WW/WL, MONOCHROME1, inversión, rotación, espejo, escalado y overlay a nivel de código fuente.
 
-Dependencias residuales confirmadas:
+## Validación 3 — Inicialización/runtime
+
+Estado: COMPLETADA PARA ARRANQUE EN CHROMIUM HEADLESS.
+
+Método:
+
+- Se añadió `.github/workflows/runtime-validation.yml`.
+- El workflow sirve la rama por HTTP local y abre `index.html` con Chromium headless.
+- Comprueba `dv-root`, `dv-canvas`, `data-viewer-integration`, `data-viewer-replacement-count` y ausencia de la pantalla fatal `No se pudo inicializar el visor`.
+- Ejecuta un segundo arranque bloqueando deliberadamente `cdnjs.cloudflare.com` para comprobar el fallback de jsPDF.
+
+Hallazgos durante las ejecuciones:
+
+1. Corrida 1 (`31644131507`) falló: el marcador del parser era demasiado rígido.
+2. Corrida 2 (`31644346172`) falló: las sustituciones estrictas se estaban intentando aplicar a scripts inline auxiliares que no contienen el parser/state.
+3. Se corrigió el loader para identificar explícitamente el script principal del visor y aplicar allí las sustituciones obligatorias.
+4. Corrida 3 (`31644460063`, commit `66b256ccc37e567d5c1ab019b937cf35df7cf319`) terminó con `success`.
+5. En la corrida 3 pasaron tanto `Normal startup` como `Startup with jsPDF CDN blocked`.
+
+Lo que esta validación SÍ demuestra:
+
+- La arquitectura modular actual inicia correctamente en Chromium headless.
+- El DOM principal del visor se construye.
+- El loader completa su integración modular sin caer en el estado fatal.
+- La ausencia de jsPDF no impide el arranque base.
+
+Lo que esta validación TODAVÍA NO demuestra:
+
+- Carga y render correcto de un DICOM real.
+- Integridad diagnóstica de WW/WL, MONOCHROME1, orientación/lateralidad o PixelSpacing con archivos reales.
+- Interacción real de zoom, pan, WW/WL, flecha, texto, Length, Ángulo y Cobb.
+- Exportación PNG/JPG/PDF con una imagen real.
+- Comportamiento en Edge, Safari/iPad o dispositivos táctiles reales.
+- Que `viewer-source.html` pueda eliminarse todavía.
+
+## Dependencias residuales confirmadas
 
 1. `viewer-source.html` sigue aportando la estructura HTML y estilos base del visor.
 2. Siguen allí los listeners de creación/edición/movimiento de anotaciones y parte de la coordinación de herramientas.
 3. Siguen allí `draw()`, selección/lista de archivos, panel de metadata, perfiles de ventana, transformaciones y coordinación de exportación, aunque varias de sus operaciones centrales ya delegan a módulos externos.
 4. `viewer-loader.js` todavía transforma texto del archivo transitorio mediante marcadores; esta arquitectura debe desaparecer antes de producción.
 
-Limitaciones de esta validación:
-
-- No demuestra todavía que el JavaScript inicialice correctamente en Chrome/Edge/Safari/iPad.
-- No demuestra carga/render de un DICOM real.
-- No valida todavía zoom, WW/WL, anotaciones, PixelSpacing, exportación o fullscreen mediante interacción real.
-- No autoriza eliminar `viewer-source.html`.
-
 ## Siguiente fase
 
-Validación 3 — Prueba de inicialización/runtime y preparación de una ruta para retirar `viewer-source.html` sin perder estructura ni listeners.
+Validación 4 — prueba funcional con DICOM real/sintético controlado: carga, render, metadata, WW/WL, transformaciones y luego herramientas/anotaciones/exportación.
 
-Después de esa fase: pruebas funcionales con DICOM reales antes de considerar merge o producción.
+Solo después de superar esa fase debe plantearse la retirada definitiva de `viewer-source.html`.
