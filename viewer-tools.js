@@ -41,13 +41,13 @@
   }
 
   function angleAtVertex(vertex,a,b,w,h){
-    const v1x=(a.fx-vertex.fx)*w, v1y=(a.fy-vertex.fy)*h;
-    const v2x=(b.fx-vertex.fx)*w, v2y=(b.fy-vertex.fy)*h;
-    const dot=v1x*v2x+v1y*v2y;
-    const m1=Math.hypot(v1x,v1y), m2=Math.hypot(v2x,v2y);
-    if(!m1 || !m2) return 0;
-    const c=Math.max(-1,Math.min(1,dot/(m1*m2)));
-    return Math.acos(c)*180/Math.PI;
+    const v1={x:(a.fx-vertex.fx)*w,y:(a.fy-vertex.fy)*h};
+    const v2={x:(b.fx-vertex.fx)*w,y:(b.fy-vertex.fy)*h};
+    const dot=v1.x*v2.x+v1.y*v2.y;
+    const mag1=Math.hypot(v1.x,v1.y),mag2=Math.hypot(v2.x,v2.y);
+    if(mag1===0||mag2===0) return 0;
+    const cos=Math.max(-1,Math.min(1,dot/(mag1*mag2)));
+    return Math.acos(cos)*180/Math.PI;
   }
 
   function cobbAngleBetweenLines(p1,p2,p3,p4,w,h){
@@ -58,14 +58,22 @@
     return d;
   }
 
+  // Conserva exactamente el comportamiento legado: la etiqueta se coloca
+  // sobre la bisectriz; para rayos casi opuestos (~180°), donde la suma de
+  // vectores no define una bisectriz estable, usa la perpendicular al primer
+  // rayo como respaldo en vez de dejar la etiqueta sobre el vértice.
   function angleBisectorLabelPos(vx,vy,ax,ay,bx,by,w){
-    const u1x=ax-vx, u1y=ay-vy, u2x=bx-vx, u2y=by-vy;
-    const m1=Math.hypot(u1x,u1y)||1, m2=Math.hypot(u2x,u2y)||1;
-    let bxu=u1x/m1+u2x/m2, byu=u1y/m1+u2y/m2;
-    const bm=Math.hypot(bxu,byu)||1;
-    bxu/=bm; byu/=bm;
-    const radius=Math.max(w*0.035,18);
-    return {x:vx+bxu*radius,y:vy+byu*radius};
+    const v1x=ax-vx,v1y=ay-vy,v1mag=Math.hypot(v1x,v1y)||1;
+    const v2x=bx-vx,v2y=by-vy,v2mag=Math.hypot(v2x,v2y)||1;
+    let bisX=v1x/v1mag+v2x/v2mag,bisY=v1y/v1mag+v2y/v2mag;
+    let bisMag=Math.hypot(bisX,bisY);
+    if(bisMag<0.0001){
+      bisX=-v1y/v1mag;
+      bisY=v1x/v1mag;
+      bisMag=1;
+    }
+    const dist=w*0.045;
+    return {x:vx+(bisX/bisMag)*dist,y:vy+(bisY/bisMag)*dist};
   }
 
   global.imeDicomTools={
