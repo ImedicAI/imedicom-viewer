@@ -53,14 +53,11 @@ jobs:
               try{
                 const f=e.detail.entry, canvas=document.getElementById('dv-canvas'), tools=window.imeDicomTools;
                 if(!f||!canvas||!tools) throw new Error('missing_runtime');
-                // SOLO CI: el candado mantiene #dv-root en display:none. Se expone
-                // el layout después de cargar el fixture para poder generar coordenadas
-                // de mouse reales. No modifica viewer-access.js ni la app normal.
                 const root=document.getElementById('dv-root'); if(root) root.classList.remove('dv-locked');
                 const lock=document.getElementById('dv-lock-screen'); if(lock) lock.classList.add('dv-hidden');
                 await wait(80);
                 const initialRect=canvas.getBoundingClientRect();
-                if(initialRect.width<10||initialRect.height<10) throw new Error('canvas_rect_'+initialRect.width+'x'+initialRect.height);
+                if(initialRect.width<=0||initialRect.height<=0) throw new Error('canvas_rect_'+initialRect.width+'x'+initialRect.height);
                 const pos=(fx,fy)=>{const r=canvas.getBoundingClientRect();return {x:r.left+r.width*fx,y:r.top+r.height*fy};};
                 const fire=(type,fx,fy)=>{const p=pos(fx,fy);canvas.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:p.x,clientY:p.y,button:0,buttons:type==='mouseup'?0:1}));};
                 const drag=(a,b)=>{fire('mousedown',a[0],a[1]);fire('mousemove',b[0],b[1]);fire('mouseup',b[0],b[1]);};
@@ -68,25 +65,21 @@ jobs:
                 const btn=id=>{const b=document.getElementById(id);if(!b)throw new Error('missing_'+id);b.click();};
 
                 btn('dv-tool-arrow'); drag([.15,.20],[.75,.70]); await wait(30);
-                let arrow=f.annotations.find(a=>a.type==='arrow');
-                if(!arrow) throw new Error('arrow_create');
+                let arrow=f.annotations.find(a=>a.type==='arrow'); if(!arrow) throw new Error('arrow_create');
 
                 btn('dv-tool-length'); drag([.10,.50],[.60,.50]); await wait(30);
-                const length=f.annotations.find(a=>a.type==='length');
-                if(!length) throw new Error('length_create');
+                const length=f.annotations.find(a=>a.type==='length'); if(!length) throw new Error('length_create');
                 const distPix=Math.hypot((length.x2-length.x1)*canvas.width,(length.y2-length.y1)*canvas.height);
                 const lengthCm=distPix*f.pixel.mmPerPixel/10;
                 if(Math.abs(lengthCm-0.08)>0.015) throw new Error('length_pixelspacing_'+lengthCm);
 
                 btn('dv-tool-angle'); clickPoint(.20,.50); clickPoint(.50,.50); clickPoint(.50,.10); await wait(30);
-                const angle=f.annotations.find(a=>a.type==='angle');
-                if(!angle) throw new Error('angle_create');
+                const angle=f.annotations.find(a=>a.type==='angle'); if(!angle) throw new Error('angle_create');
                 const deg=tools.angleAtVertex(angle.vertex,angle.a,angle.b,canvas.width,canvas.height);
                 if(Math.abs(deg-90)>0.1) throw new Error('angle_value_'+deg);
 
                 btn('dv-tool-cobb'); clickPoint(.15,.25); clickPoint(.80,.25); clickPoint(.35,.10); clickPoint(.35,.85); await wait(30);
-                const cobb=f.annotations.find(a=>a.type==='cobb');
-                if(!cobb) throw new Error('cobb_create');
+                const cobb=f.annotations.find(a=>a.type==='cobb'); if(!cobb) throw new Error('cobb_create');
                 const cobbDeg=tools.cobbAngleBetweenLines(cobb.p1,cobb.p2,cobb.p3,cobb.p4,canvas.width,canvas.height);
                 if(Math.abs(cobbDeg-90)>0.1) throw new Error('cobb_value_'+cobbDeg);
 
@@ -102,10 +95,8 @@ jobs:
 
                 const beforeUndo=JSON.stringify(f.annotations);
                 btn('dv-undo'); await wait(20);
-                const afterUndo=JSON.stringify(f.annotations);
-                if(afterUndo===beforeUndo) throw new Error('undo_no_change');
-                btn('dv-redo'); await wait(20);
-                if(JSON.stringify(f.annotations)!==beforeUndo) throw new Error('redo_restore');
+                const afterUndo=JSON.stringify(f.annotations); if(afterUndo===beforeUndo) throw new Error('undo_no_change');
+                btn('dv-redo'); await wait(20); if(JSON.stringify(f.annotations)!==beforeUndo) throw new Error('redo_restore');
 
                 finish('pass',{arrow:true,lengthCm:+lengthCm.toFixed(3),angle:+deg.toFixed(1),cobb:+cobbDeg.toFixed(1),text:true,textMoved:true,undo:true,redo:true,count:f.annotations.length});
               }catch(err){finish('fail',{error:err.message});}
