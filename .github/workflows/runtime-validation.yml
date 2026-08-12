@@ -1,0 +1,85 @@
+name: Runtime validation
+
+on:
+  push:
+    branches:
+      - redesign/radiology-dark-premium
+  workflow_dispatch:
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find Chromium
+        id: browser
+        shell: bash
+        run: |
+          set -e
+          for b in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then
+              echo "bin=$(command -v "$b")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "No Chromium/Chrome binary found" >&2
+          exit 1
+
+      - name: Start local server
+        shell: bash
+        run: |
+          python3 -m http.server 8080 >server.log 2>&1 &
+          echo $! > server.pid
+          sleep 2
+
+      - name: Normal startup
+        shell: bash
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -o pipefail
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --virtual-time-budget=12000 --enable-logging=stderr --v=0 \
+            --dump-dom http://127.0.0.1:8080/index.html > dom-normal.html 2> chrome-normal.log || true
+
+          grep -q 'id="dv-root"' dom-normal.html
+          grep -q 'id="dv-canvas"' dom-normal.html
+          grep -q 'data-viewer-integration=' dom-normal.html
+          grep -q 'data-viewer-replacement-count=' dom-normal.html
+          if grep -q 'No se pudo inicializar el visor' dom-normal.html; then
+            echo "Viewer entered fatal fallback state" >&2
+            exit 1
+          fi
+
+      - name: Startup with jsPDF CDN blocked
+        shell: bash
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -o pipefail
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --host-resolver-rules='MAP cdnjs.cloudflare.com 127.0.0.1' \
+            --virtual-time-budget=12000 --enable-logging=stderr --v=0 \
+            --dump-dom http://127.0.0.1:8080/index.html > dom-no-jspdf.html 2> chrome-no-jspdf.log || true
+
+          grep -q 'id="dv-root"' dom-no-jspdf.html
+          grep -q 'id="dv-canvas"' dom-no-jspdf.html
+          grep -q 'data-viewer-integration=' dom-no-jspdf.html
+          if grep -q 'No se pudo inicializar el visor' dom-no-jspdf.html; then
+            echo "Viewer must survive jsPDF CDN failure" >&2
+            exit 1
+          fi
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-validation
+          path: |
+            dom-normal.html
+            dom-no-jspdf.html
+            chrome-normal.log
+            chrome-no-jspdf.log
+            server.log
