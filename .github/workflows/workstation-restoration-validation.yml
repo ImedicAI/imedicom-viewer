@@ -17,7 +17,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for f in viewer-ui.js viewer-loader.js viewer-runtime.js viewer-load.js viewer-render.js viewer-tools.js viewer-export.js viewer-viewport.js viewer-annotation-interaction.js viewer-dicom-data.js dicom-core.js; do
+          for f in viewer-ui.js viewer-loader.js viewer-runtime.js viewer-load.js viewer-render.js viewer-tools.js viewer-export.js viewer-viewport.js viewer-annotation-interaction.js viewer-dicom-data.js dicom-core.js workstation-restoration.js; do
             node --check "$f"
           done
 
@@ -26,7 +26,11 @@ jobs:
         run: |
           set -euo pipefail
           test -f assets/chest-watermark.svg
+          test -f workstation-restoration.css
+          test -f workstation-restoration.js
           grep -q 'assets/chest-watermark.svg' viewer-premium.css
+          grep -q 'workstation-restoration.css' index.html
+          grep -q 'workstation-restoration.js' index.html
           grep -q 'appbar-tools' index.html
           grep -q 'Diseño' index.html
           grep -q 'Ayuda' index.html
@@ -34,6 +38,11 @@ jobs:
           grep -q 'premium-tool-icon' viewer-ui.js
           grep -q 'premium-study-status' viewer-ui.js
           grep -q 'MutationObserver' viewer-ui.js
+          grep -q 'premium-bottom-dock' workstation-restoration.js
+          grep -q 'WL/WW' workstation-restoration.js
+          grep -q 'dv-invert' workstation-restoration.js
+          grep -q 'dv-wlww-reset' workstation-restoration.js
+          grep -q 'display:flex!important' workstation-restoration.css
 
       - name: Validate no clinical image payload was added
         shell: bash
@@ -63,6 +72,8 @@ jobs:
           sleep 2
           curl -fsS http://127.0.0.1:8000/index.html >/tmp/index.html
           curl -fsS http://127.0.0.1:8000/viewer-premium.css >/tmp/viewer-premium.css
+          curl -fsS http://127.0.0.1:8000/workstation-restoration.css >/tmp/workstation-restoration.css
+          curl -fsS http://127.0.0.1:8000/workstation-restoration.js >/tmp/workstation-restoration.js
           curl -fsS http://127.0.0.1:8000/assets/chest-watermark.svg >/tmp/chest-watermark.svg
           curl -fsS http://127.0.0.1:8000/workstation-preview.html >/tmp/workstation-preview.html
 
@@ -85,8 +96,19 @@ jobs:
           BROWSER_BIN: ${{ steps.browser.outputs.bin }}
         run: |
           set -euo pipefail
-          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1600,900 --virtual-time-budget=3500 --screenshot=/tmp/workstation.png http://127.0.0.1:8000/workstation-preview.html || true
+          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1600,900 --virtual-time-budget=4500 --screenshot=/tmp/workstation.png http://127.0.0.1:8000/workstation-preview.html || true
           test -s /tmp/workstation.png
+
+      - name: Validate restored DOM in Chromium
+        shell: bash
+        env:
+          BROWSER_BIN: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -euo pipefail
+          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --virtual-time-budget=4500 --dump-dom http://127.0.0.1:8000/workstation-preview.html > /tmp/workstation-dom.html
+          grep -q 'premium-bottom-dock' /tmp/workstation-dom.html
+          grep -q 'Cargue un estudio DICOM' /tmp/workstation-dom.html
+          grep -q 'premium-study-status' /tmp/workstation-dom.html
 
       - name: Upload smoke screenshot
         uses: actions/upload-artifact@v4
