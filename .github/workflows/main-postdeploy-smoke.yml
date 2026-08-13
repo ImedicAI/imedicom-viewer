@@ -67,17 +67,18 @@ jobs:
               if(!root) throw new Error('root_missing');
               root.classList.remove('dv-locked');
               if(lock) lock.classList.add('dv-hidden');
-              await wait(100);
-              const required=[
-                'dv-viewer-wrap','dv-quad-herramientas','premium-study-status',
-                'premium-bottom-dock','premium-empty-overlay'
-              ];
-              for(const id of required){ if(!document.getElementById(id)) throw new Error('missing_'+id); }
+              await wait(250);
+              for(const id of ['dv-viewer-wrap','dv-quad-herramientas','premium-study-status']){
+                if(!document.getElementById(id)) throw new Error('missing_'+id);
+              }
+              for(const sel of ['.premium-bottom-dock','.premium-empty-overlay']){
+                if(!document.querySelector(sel)) throw new Error('missing_'+sel.slice(1));
+              }
               const tools=[...document.querySelectorAll('#dv-quad-herramientas .premium-icon-button')];
               if(tools.length<6) throw new Error('premium_icons_'+tools.length);
               const utilities=[...document.querySelectorAll('.appbar-tool')];
               if(utilities.length<3) throw new Error('utility_controls_'+utilities.length);
-              finish('pass',{premiumIcons:tools.length,utilities:utilities.length});
+              finish('pass',{premiumIcons:tools.length,utilities:utilities.length,dock:true,emptyOverlay:true});
             }catch(err){finish('fail',{error:err.message});}
           })();
           JS
@@ -103,6 +104,7 @@ jobs:
             http://127.0.0.1:8080/main-smoke.html > dom-main-smoke.html 2> chrome-main-smoke.log || true
           grep -q 'data-main-smoke="pass"' dom-main-smoke.html
           grep -q '"utilities":3' dom-main-smoke.html
+          grep -q '"dock":true' dom-main-smoke.html
           if grep -q 'data-main-smoke="fail"' dom-main-smoke.html; then
             grep 'ime-main-smoke-result' dom-main-smoke.html >&2 || true
             exit 1
