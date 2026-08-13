@@ -2,7 +2,7 @@ name: Regression validation
 
 on:
   push:
-    branches: [redesign/radiology-dark-premium]
+    branches: [redesign/radiology-dark-premium, ui/workstation-premium-restoration]
   workflow_dispatch:
 
 jobs:
