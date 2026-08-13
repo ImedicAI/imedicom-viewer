@@ -63,6 +63,13 @@
     }catch(e){return null;}
   }
 
+  function shouldAutoOrient(meta,pixel){
+    if(!meta||!pixel)return false;
+    const carestream=/CARESTREAM/i.test(meta.manufacturer||'');
+    const forProcessing=meta.presentationIntentType==='FOR PROCESSING';
+    return pixel.rows>pixel.cols && !!meta.isChestBodyPart && carestream && forProcessing;
+  }
+
   function emit(name,detail){
     try{ window.dispatchEvent(new CustomEvent(name,{detail})); }catch(e){}
   }
@@ -103,9 +110,7 @@
             // Automatic orientation is intentionally restricted to the exact
             // Carestream chest FOR PROCESSING pattern validated with real studies.
             // Other body parts and FOR PRESENTATION images are left untouched.
-            const carestream=/CARESTREAM/i.test(entry.meta.manufacturer||'');
-            const forProcessing=entry.meta.presentationIntentType==='FOR PROCESSING';
-            if(entry.pixel.rows>entry.pixel.cols && entry.meta.isChestBodyPart && carestream && forProcessing){
+            if(shouldAutoOrient(entry.meta,entry.pixel)){
               entry.rotation=90;
               entry.flipH=true;
             }
@@ -211,5 +216,5 @@
     return {handleFiles,collectDroppedFiles,loadFromLink};
   }
 
-  window.imeDicomLoad={init,collectDroppedFiles,extractDriveFileId,getAccessCode};
+  window.imeDicomLoad={init,collectDroppedFiles,extractDriveFileId,getAccessCode,shouldAutoOrient};
 })();
