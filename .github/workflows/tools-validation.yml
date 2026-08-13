@@ -1,0 +1,147 @@
+name: Tools validation
+
+on:
+  push:
+    branches: [redesign/radiology-dark-premium]
+  workflow_dispatch:
+
+jobs:
+  tools:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find Chromium
+        id: browser
+        shell: bash
+        run: |
+          for b in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then echo "bin=$(command -v "$b")" >> "$GITHUB_OUTPUT"; exit 0; fi
+          done
+          exit 1
+      - name: Build fixture and tool harness
+        shell: bash
+        run: |
+          mkdir -p tests
+          python3 - <<'PY'
+          import struct, pathlib
+          out=bytearray(128)+b'DICM'
+          def even(b,p=b' '): return b if len(b)%2==0 else b+p
+          def elem(g,e,vr,v):
+              global out
+              if isinstance(v,str): v=even(v.encode('ascii'),b'\0' if vr=='UI' else b' ')
+              elif isinstance(v,int): v=struct.pack('<H',v)
+              if vr in ('OB','OW','OF','SQ','UT','UN','OD','OL','UC','UR'):
+                  out.extend(struct.pack('<HH2sH',g,e,vr.encode(),0)); out.extend(struct.pack('<I',len(v)))
+              else: out.extend(struct.pack('<HH2sH',g,e,vr.encode(),len(v)))
+              out.extend(v)
+          elem(0x0002,0x0010,'UI','1.2.840.10008.1.2.1')
+          elem(0x0008,0x0060,'CS','DX'); elem(0x0010,0x0010,'PN','TOOLS^CONTROL'); elem(0x0010,0x0020,'LO','TOOLS-001')
+          elem(0x0018,0x0015,'CS','CHEST'); elem(0x0018,0x5101,'CS','AP')
+          elem(0x0028,0x0002,'US',1); elem(0x0028,0x0004,'CS','MONOCHROME2'); elem(0x0028,0x0010,'US',6); elem(0x0028,0x0011,'US',8)
+          elem(0x0028,0x0030,'DS','0.20\\0.20'); elem(0x0028,0x0100,'US',8); elem(0x0028,0x0101,'US',8); elem(0x0028,0x0102,'US',7); elem(0x0028,0x0103,'US',0)
+          elem(0x0028,0x1050,'DS','128'); elem(0x0028,0x1051,'DS','256'); elem(0x0028,0x1052,'DS','0'); elem(0x0028,0x1053,'DS','1')
+          elem(0x7fe0,0x0010,'OB',bytes(range(0,240,5))[:48])
+          pathlib.Path('tests/tools.dcm').write_bytes(out)
+          PY
+          cat > tests/tools-test.js <<'JS'
+          (function(){
+            const result=document.createElement('div'); result.id='ime-tools-result'; result.style.display='none'; document.body.appendChild(result);
+            const finish=(s,d)=>{result.dataset.status=s;result.textContent=JSON.stringify(d||{});document.documentElement.dataset.toolsValidation=s;};
+            const wait=ms=>new Promise(r=>setTimeout(r,ms));
+            window.addEventListener('imeDicom:file-error',e=>finish('fail',{error:e.detail?.error||'file-error'}),{once:true});
+            window.addEventListener('imeDicom:file-loaded',async e=>{
+              try{
+                const f=e.detail.entry, canvas=document.getElementById('dv-canvas'), tools=window.imeDicomTools;
+                if(!f||!canvas||!tools) throw new Error('missing_runtime');
+                const root=document.getElementById('dv-root'); if(root) root.classList.remove('dv-locked');
+                const lock=document.getElementById('dv-lock-screen'); if(lock) lock.classList.add('dv-hidden');
+                await wait(80);
+                const initialRect=canvas.getBoundingClientRect();
+                if(initialRect.width<=0||initialRect.height<=0) throw new Error('canvas_rect_'+initialRect.width+'x'+initialRect.height);
+                const pos=(fx,fy)=>{const r=canvas.getBoundingClientRect();return {x:r.left+r.width*fx,y:r.top+r.height*fy};};
+                const fire=(type,fx,fy)=>{const p=pos(fx,fy);canvas.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:p.x,clientY:p.y,button:0,buttons:type==='mouseup'?0:1}));};
+                const drag=(a,b)=>{fire('mousedown',a[0],a[1]);fire('mousemove',b[0],b[1]);fire('mouseup',b[0],b[1]);};
+                const clickPoint=(x,y)=>{fire('mousedown',x,y);fire('mouseup',x,y);};
+                const btn=id=>{const b=document.getElementById(id);if(!b)throw new Error('missing_'+id);b.click();};
+
+                btn('dv-tool-arrow'); drag([.15,.20],[.75,.70]); await wait(30);
+                const arrow=f.annotations.find(a=>a.type==='arrow'); if(!arrow) throw new Error('arrow_create');
+                // El fixture mide solo 8x6: el radio de agarre mínimo (10 px),
+                // correcto para radiografías reales, cubriría toda la imagen. Aislamos
+                // las siguientes herramientas para no convertir ese detalle de CI en fallo.
+                f.annotations=[]; f.undoStack=[]; f.redoStack=[];
+
+                btn('dv-tool-length'); drag([.10,.50],[.60,.50]); await wait(30);
+                const length=f.annotations.find(a=>a.type==='length'); if(!length) throw new Error('length_create');
+                const distPix=Math.hypot((length.x2-length.x1)*canvas.width,(length.y2-length.y1)*canvas.height);
+                const lengthCm=distPix*f.pixel.mmPerPixel/10;
+                if(Math.abs(lengthCm-0.08)>0.015) throw new Error('length_pixelspacing_'+lengthCm);
+
+                btn('dv-tool-angle'); clickPoint(.20,.50); clickPoint(.50,.50); clickPoint(.50,.10); await wait(30);
+                const angle=f.annotations.find(a=>a.type==='angle'); if(!angle) throw new Error('angle_create');
+                const deg=tools.angleAtVertex(angle.vertex,angle.a,angle.b,canvas.width,canvas.height);
+                if(Math.abs(deg-90)>0.1) throw new Error('angle_value_'+deg);
+
+                btn('dv-tool-cobb'); clickPoint(.15,.25); clickPoint(.80,.25); clickPoint(.35,.10); clickPoint(.35,.85); await wait(30);
+                const cobb=f.annotations.find(a=>a.type==='cobb'); if(!cobb) throw new Error('cobb_create');
+                const cobbDeg=tools.cobbAngleBetweenLines(cobb.p1,cobb.p2,cobb.p3,cobb.p4,canvas.width,canvas.height);
+                if(Math.abs(cobbDeg-90)>0.1) throw new Error('cobb_value_'+cobbDeg);
+
+                btn('dv-tool-text'); fire('mousedown',.30,.70); await wait(20);
+                const input=document.getElementById('dv-text-input'); if(!input) throw new Error('text_input');
+                input.value='CONTROL TXT'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); await wait(30);
+                let text=f.annotations.find(a=>a.type==='text'&&a.text==='CONTROL TXT'); if(!text) throw new Error('text_create');
+
+                const old={x:text.x,y:text.y};
+                fire('mousedown',text.x,text.y); fire('mousemove',.55,.75); fire('mouseup',.55,.75); await wait(30);
+                text=f.annotations.find(a=>a.type==='text'&&a.text==='CONTROL TXT');
+                if(!text||Math.hypot(text.x-old.x,text.y-old.y)<.05) throw new Error('text_move');
+
+                const beforeUndo=JSON.stringify(f.annotations);
+                btn('dv-undo'); await wait(20);
+                const afterUndo=JSON.stringify(f.annotations); if(afterUndo===beforeUndo) throw new Error('undo_no_change');
+                btn('dv-redo'); await wait(20); if(JSON.stringify(f.annotations)!==beforeUndo) throw new Error('redo_restore');
+
+                finish('pass',{arrow:true,lengthCm:+lengthCm.toFixed(3),angle:+deg.toFixed(1),cobb:+cobbDeg.toFixed(1),text:true,textMoved:true,undo:true,redo:true,count:f.annotations.length});
+              }catch(err){finish('fail',{error:err.message});}
+            },{once:true});
+            (async()=>{
+              for(let i=0;i<120;i++){
+                const input=document.getElementById('dv-file-input');
+                if(input&&document.documentElement.dataset.viewerIntegration){
+                  const blob=await (await fetch('tests/tools.dcm')).blob(); const file=new File([blob],'tools.dcm',{type:'application/dicom'}); const dt=new DataTransfer(); dt.items.add(file); input.files=dt.files; input.dispatchEvent(new Event('change',{bubbles:true})); return;
+                }
+                await wait(100);
+              }
+              finish('fail',{error:'viewer_not_ready'});
+            })();
+          })();
+          JS
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('index.html').read_text(); Path('tools-test.html').write_text(s.replace('</body>','<script src="tests/tools-test.js"></script>\n</body>'))
+          PY
+      - name: Start server
+        run: python3 -m http.server 8080 >server.log 2>&1 &
+      - name: Exercise tools and measurements
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        shell: bash
+        run: |
+          sleep 2
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=18000 --dump-dom http://127.0.0.1:8080/tools-test.html > dom-tools.html 2> chrome-tools.log || true
+          grep -q 'data-tools-validation="pass"' dom-tools.html
+          grep -q '"arrow":true' dom-tools.html
+          grep -q '"textMoved":true' dom-tools.html
+          grep -q '"undo":true' dom-tools.html
+          grep -q '"redo":true' dom-tools.html
+          if grep -q 'data-tools-validation="fail"' dom-tools.html; then grep 'ime-tools-result' dom-tools.html >&2 || true; exit 1; fi
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tools-validation
+          path: |
+            dom-tools.html
+            chrome-tools.log
+            tests/tools.dcm

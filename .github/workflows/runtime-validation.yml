@@ -1,0 +1,330 @@
+name: Runtime validation
+
+on:
+  push:
+    branches:
+      - redesign/radiology-dark-premium
+  workflow_dispatch:
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Find Chromium
+        id: browser
+        shell: bash
+        run: |
+          set -e
+          for b in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then
+              echo "bin=$(command -v "$b")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "No Chromium/Chrome binary found" >&2
+          exit 1
+
+      - name: Build controlled DICOM fixture and functional harness
+        shell: bash
+        run: |
+          mkdir -p tests
+          python3 - <<'PY'
+          import struct, pathlib
+
+          out = bytearray(128) + b'DICM'
+
+          def pad_even(data, pad=b' '):
+              return data if len(data) % 2 == 0 else data + pad
+
+          def elem(group, element, vr, value):
+              global out
+              if isinstance(value, str):
+                  enc = value.encode('ascii')
+                  pad = b'\x00' if vr == 'UI' else b' '
+                  value = pad_even(enc, pad)
+              elif isinstance(value, int):
+                  value = struct.pack('<H', value)
+              if vr in ('OB','OW','OF','SQ','UT','UN','OD','OL','UC','UR'):
+                  out.extend(struct.pack('<HH2sH', group, element, vr.encode('ascii'), 0))
+                  out.extend(struct.pack('<I', len(value)))
+              else:
+                  out.extend(struct.pack('<HH2sH', group, element, vr.encode('ascii'), len(value)))
+              out.extend(value)
+
+          elem(0x0002,0x0010,'UI','1.2.840.10008.1.2.1')
+          elem(0x0008,0x0020,'DA','20260812')
+          elem(0x0008,0x0030,'TM','153000')
+          elem(0x0008,0x0060,'CS','DX')
+          elem(0x0008,0x0080,'LO','IMEDICA TEST')
+          elem(0x0008,0x1030,'LO','CHEST AP CONTROLLED')
+          elem(0x0010,0x0010,'PN','CONTROL^PATIENT')
+          elem(0x0010,0x0020,'LO','TEST-001')
+          elem(0x0010,0x0030,'DA','19800101')
+          elem(0x0018,0x0015,'CS','CHEST')
+          elem(0x0018,0x5101,'CS','AP')
+
+          rows, cols = 6, 8
+          elem(0x0028,0x0002,'US',1)
+          elem(0x0028,0x0004,'CS','MONOCHROME2')
+          elem(0x0028,0x0010,'US',rows)
+          elem(0x0028,0x0011,'US',cols)
+          elem(0x0028,0x0030,'DS','0.20\\0.20')
+          elem(0x0028,0x0100,'US',8)
+          elem(0x0028,0x0101,'US',8)
+          elem(0x0028,0x0102,'US',7)
+          elem(0x0028,0x0103,'US',0)
+          elem(0x0028,0x1050,'DS','128')
+          elem(0x0028,0x1051,'DS','256')
+          elem(0x0028,0x1052,'DS','0')
+          elem(0x0028,0x1053,'DS','1')
+
+          pixels = bytes([0,16,32,48,64,80,96,112,
+                          32,48,64,80,96,112,128,144,
+                          64,80,96,112,128,144,160,176,
+                          96,112,128,144,160,176,192,208,
+                          128,144,160,176,192,208,224,240,
+                          144,160,176,192,208,224,240,255])
+          elem(0x7FE0,0x0010,'OB',pixels)
+          pathlib.Path('tests/controlled.dcm').write_bytes(out)
+          print('fixture bytes:', len(out))
+          PY
+
+          cat > tests/functional-test.js <<'JS'
+          (function(){
+            const result=document.createElement('div');
+            result.id='ime-functional-result';
+            result.style.display='none';
+            document.body.appendChild(result);
+
+            function finish(status,detail){
+              result.dataset.status=status;
+              result.textContent=JSON.stringify(detail||{});
+              document.documentElement.dataset.dicomFunctional=status;
+            }
+
+            function grayMatrix(canvas){
+              const d=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
+              const out=[];
+              for(let y=0;y<canvas.height;y++){
+                const row=[];
+                for(let x=0;x<canvas.width;x++) row.push(d[(y*canvas.width+x)*4]);
+                out.push(row);
+              }
+              return out;
+            }
+
+            function checksum(m){
+              let s=0,weighted=0,min=255,max=0,n=0;
+              for(let y=0;y<m.length;y++)for(let x=0;x<m[y].length;x++){
+                const v=m[y][x];s+=v;weighted+=v*(1+x+y*17);min=Math.min(min,v);max=Math.max(max,v);n++;
+              }
+              return {sum:s,weighted,min,max,n};
+            }
+
+            function sameMatrix(a,b,tol=0){
+              if(a.length!==b.length)return false;
+              for(let y=0;y<a.length;y++){
+                if(a[y].length!==b[y].length)return false;
+                for(let x=0;x<a[y].length;x++)if(Math.abs(a[y][x]-b[y][x])>tol)return false;
+              }
+              return true;
+            }
+
+            function rotate90Expected(src){
+              const h=src.length,w=src[0].length;
+              const out=Array.from({length:w},()=>Array(h));
+              for(let y=0;y<h;y++)for(let x=0;x<w;x++)out[x][h-1-y]=src[y][x];
+              return out;
+            }
+            function flipHExpected(src){return src.map(row=>row.slice().reverse());}
+            function flipVExpected(src){return src.slice().reverse().map(row=>row.slice());}
+            function invertExpected(src){return src.map(row=>row.map(v=>255-v));}
+
+            window.addEventListener('imeDicom:file-error',e=>{
+              finish('fail',{error:e.detail&&e.detail.error||'file-error'});
+            },{once:true});
+
+            window.addEventListener('imeDicom:file-loaded',e=>{
+              try{
+                const entry=e.detail.entry;
+                const canvas=document.getElementById('dv-canvas');
+                const render=window.imeDicomRender;
+                if(!entry||entry.status!=='ok') throw new Error('entry_not_ok');
+                if(!render||!render.renderBaseImage) throw new Error('render_module_missing');
+                if(!entry.meta||entry.meta.patientName!=='CONTROL PATIENT') throw new Error('patient_name');
+                if(entry.meta.patientId!=='TEST-001') throw new Error('patient_id');
+                if(entry.meta.modality!=='DX') throw new Error('modality');
+                if(entry.meta.viewPosition!=='AP'||entry.meta.isFrontal!==true) throw new Error('view');
+                if(!entry.meta.isChestBodyPart) throw new Error('body_part');
+                if(!entry.pixel||entry.pixel.rows!==6||entry.pixel.cols!==8) throw new Error('dimensions');
+                if(Math.abs(entry.pixel.mmPerPixel-0.20)>0.0001) throw new Error('pixel_spacing');
+                if(!canvas||canvas.width!==8||canvas.height!==6) throw new Error('canvas_dimensions');
+                if(canvas.style.display==='none') throw new Error('canvas_hidden');
+                const empty=document.getElementById('dv-empty');
+                if(empty&&getComputedStyle(empty).display!=='none') throw new Error('empty_state_visible');
+
+                const original={
+                  wc:entry.pixel.windowCenter,ww:entry.pixel.windowWidth,
+                  photometric:entry.pixel.photometric,
+                  rotation:entry.rotation||0,flipH:!!entry.flipH,flipV:!!entry.flipV,invert:!!entry.invert
+                };
+
+                entry.rotation=0;entry.flipH=false;entry.flipV=false;entry.invert=false;entry.pixel.photometric='MONOCHROME2';
+                entry.pixel.windowCenter=original.wc;entry.pixel.windowWidth=original.ww;
+                const baseline=grayMatrix(render.renderBaseImage(entry,1));
+                const baseC=checksum(baseline);
+                if(!(baseC.max>baseC.min&&baseC.sum>0)) throw new Error('render_pixels');
+
+                entry.pixel.windowCenter=original.wc+40;
+                const wl=grayMatrix(render.renderBaseImage(entry,1));
+                const wlC=checksum(wl);
+                if(wlC.weighted===baseC.weighted) throw new Error('wl_no_pixel_change');
+
+                entry.pixel.windowCenter=original.wc;
+                entry.pixel.windowWidth=Math.max(1,original.ww*0.5);
+                const ww=grayMatrix(render.renderBaseImage(entry,1));
+                const wwC=checksum(ww);
+                if(wwC.weighted===baseC.weighted) throw new Error('ww_no_pixel_change');
+
+                entry.pixel.windowWidth=original.ww;
+                entry.invert=true;
+                const inv=grayMatrix(render.renderBaseImage(entry,1));
+                if(!sameMatrix(inv,invertExpected(baseline),1)) throw new Error('invert_mapping');
+
+                entry.invert=false;
+                entry.rotation=90;
+                const rot=render.renderBaseImage(entry,1);
+                const rotM=grayMatrix(rot);
+                if(rot.width!==6||rot.height!==8) throw new Error('rotation_dimensions');
+                if(!sameMatrix(rotM,rotate90Expected(baseline),1)) throw new Error('rotation_mapping');
+
+                entry.flipH=true;
+                const fhM=grayMatrix(render.renderBaseImage(entry,1));
+                if(!sameMatrix(fhM,flipHExpected(rotM),1)) throw new Error('flip_h_mapping');
+
+                entry.flipH=false;entry.flipV=true;
+                const fvM=grayMatrix(render.renderBaseImage(entry,1));
+                if(!sameMatrix(fvM,flipVExpected(rotM),1)) throw new Error('flip_v_mapping');
+
+                entry.rotation=0;entry.flipV=false;entry.pixel.photometric='MONOCHROME1';entry.invert=false;
+                const mono1=grayMatrix(render.renderBaseImage(entry,1));
+                if(!sameMatrix(mono1,invertExpected(baseline),1)) throw new Error('monochrome1_mapping');
+
+                entry.pixel.photometric='MONOCHROME1';entry.invert=true;
+                const mono1UserInv=grayMatrix(render.renderBaseImage(entry,1));
+                if(!sameMatrix(mono1UserInv,baseline,1)) throw new Error('monochrome1_user_invert_mapping');
+
+                entry.pixel.windowCenter=original.wc;entry.pixel.windowWidth=original.ww;
+                entry.pixel.photometric=original.photometric;entry.rotation=original.rotation;
+                entry.flipH=original.flipH;entry.flipV=original.flipV;entry.invert=original.invert;
+
+                finish('pass',{
+                  patient:entry.meta.patientName,id:entry.meta.patientId,modality:entry.meta.modality,view:entry.meta.viewPosition,
+                  rows:entry.pixel.rows,cols:entry.pixel.cols,mmPerPixel:entry.pixel.mmPerPixel,
+                  baseline:baseC,wl:wlC,ww:wwC,rotationCanvas:[rot.width,rot.height],
+                  invertExact:true,rotationExact:true,flipHExact:true,flipVExact:true,monochrome1Exact:true
+                });
+              }catch(err){finish('fail',{error:err.message});}
+            },{once:true});
+
+            async function start(){
+              for(let i=0;i<120;i++){
+                const input=document.getElementById('dv-file-input');
+                if(input&&document.documentElement.dataset.viewerIntegration){
+                  try{
+                    const resp=await fetch('tests/controlled.dcm',{cache:'no-store'});
+                    if(!resp.ok) throw new Error('fixture_http_'+resp.status);
+                    const blob=await resp.blob();
+                    const file=new File([blob],'controlled.dcm',{type:'application/dicom'});
+                    const dt=new DataTransfer();dt.items.add(file);input.files=dt.files;
+                    input.dispatchEvent(new Event('change',{bubbles:true}));
+                    return;
+                  }catch(err){finish('fail',{error:err.message});return;}
+                }
+                await new Promise(r=>setTimeout(r,100));
+              }
+              finish('fail',{error:'viewer_not_ready'});
+            }
+            start();
+          })();
+          JS
+
+          python3 - <<'PY'
+          from pathlib import Path
+          html=Path('index.html').read_text()
+          html=html.replace('</body>','<script src="tests/functional-test.js"></script>\n</body>')
+          Path('functional-test.html').write_text(html)
+          PY
+
+      - name: Start local server
+        shell: bash
+        run: |
+          python3 -m http.server 8080 >server.log 2>&1 &
+          echo $! > server.pid
+          sleep 2
+
+      - name: Normal startup
+        shell: bash
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -o pipefail
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --virtual-time-budget=12000 --enable-logging=stderr --v=0 \
+            --dump-dom http://127.0.0.1:8080/index.html > dom-normal.html 2> chrome-normal.log || true
+          grep -q 'id="dv-root"' dom-normal.html
+          grep -q 'id="dv-canvas"' dom-normal.html
+          grep -q 'data-viewer-integration=' dom-normal.html
+          grep -q 'data-viewer-replacement-count=' dom-normal.html
+          if grep -q 'No se pudo inicializar el visor' dom-normal.html; then exit 1; fi
+
+      - name: Startup with jsPDF CDN blocked
+        shell: bash
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -o pipefail
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --host-resolver-rules='MAP cdnjs.cloudflare.com 127.0.0.1' \
+            --virtual-time-budget=12000 --enable-logging=stderr --v=0 \
+            --dump-dom http://127.0.0.1:8080/index.html > dom-no-jspdf.html 2> chrome-no-jspdf.log || true
+          grep -q 'id="dv-root"' dom-no-jspdf.html
+          grep -q 'id="dv-canvas"' dom-no-jspdf.html
+          grep -q 'data-viewer-integration=' dom-no-jspdf.html
+          if grep -q 'No se pudo inicializar el visor' dom-no-jspdf.html; then exit 1; fi
+
+      - name: Controlled DICOM render pipeline
+        shell: bash
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -o pipefail
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --virtual-time-budget=15000 --enable-logging=stderr --v=0 \
+            --dump-dom http://127.0.0.1:8080/functional-test.html > dom-functional.html 2> chrome-functional.log || true
+          grep -q 'data-dicom-functional="pass"' dom-functional.html
+          grep -q 'invertExact' dom-functional.html
+          grep -q 'rotationExact' dom-functional.html
+          grep -q 'monochrome1Exact' dom-functional.html
+          if grep -q 'data-dicom-functional="fail"' dom-functional.html; then
+            grep 'ime-functional-result' dom-functional.html >&2 || true
+            exit 1
+          fi
+
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-validation
+          path: |
+            dom-normal.html
+            dom-no-jspdf.html
+            dom-functional.html
+            chrome-normal.log
+            chrome-no-jspdf.log
+            chrome-functional.log
+            server.log
+            tests/controlled.dcm

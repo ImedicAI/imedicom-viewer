@@ -1,0 +1,171 @@
+name: Session folder fullscreen validation
+
+on:
+  push:
+    branches: [redesign/radiology-dark-premium]
+  workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find Chromium
+        id: browser
+        shell: bash
+        run: |
+          for b in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then echo "bin=$(command -v "$b")" >> "$GITHUB_OUTPUT"; exit 0; fi
+          done
+          exit 1
+      - name: Build controlled DICOM and browser harness
+        shell: bash
+        run: |
+          mkdir -p tests
+          python3 - <<'PY'
+          import struct, pathlib
+          out=bytearray(128)+b'DICM'
+          def even(b,p=b' '): return b if len(b)%2==0 else b+p
+          def elem(g,e,vr,v):
+              global out
+              if isinstance(v,str): v=even(v.encode('ascii'),b'\0' if vr=='UI' else b' ')
+              elif isinstance(v,int): v=struct.pack('<H',v)
+              if vr in ('OB','OW','OF','SQ','UT','UN','OD','OL','UC','UR'):
+                  out.extend(struct.pack('<HH2sH',g,e,vr.encode(),0)); out.extend(struct.pack('<I',len(v)))
+              else: out.extend(struct.pack('<HH2sH',g,e,vr.encode(),len(v)))
+              out.extend(v)
+          elem(0x0002,0x0010,'UI','1.2.840.10008.1.2.1')
+          elem(0x0008,0x0060,'CS','DX'); elem(0x0010,0x0010,'PN','SESSION^CONTROL'); elem(0x0010,0x0020,'LO','SESS-001')
+          elem(0x0018,0x0015,'CS','CHEST'); elem(0x0018,0x5101,'CS','AP')
+          elem(0x0028,0x0002,'US',1); elem(0x0028,0x0004,'CS','MONOCHROME2'); elem(0x0028,0x0010,'US',6); elem(0x0028,0x0011,'US',8)
+          elem(0x0028,0x0030,'DS','0.20\\0.20'); elem(0x0028,0x0100,'US',8); elem(0x0028,0x0101,'US',8); elem(0x0028,0x0102,'US',7); elem(0x0028,0x0103,'US',0)
+          elem(0x0028,0x1050,'DS','128'); elem(0x0028,0x1051,'DS','256'); elem(0x0028,0x1052,'DS','0'); elem(0x0028,0x1053,'DS','1')
+          elem(0x7fe0,0x0010,'OB',bytes(range(0,240,5))[:48])
+          pathlib.Path('tests/session.dcm').write_bytes(out)
+          PY
+
+          cat > tests/pre-harness.js <<'JS'
+          (function(){
+            const realFetch=window.fetch.bind(window);
+            window.__ci={fsRequests:0,fsExits:0,pickerCalls:0,writes:[],closed:0,fsEl:null};
+            Object.defineProperty(document,'fullscreenElement',{configurable:true,get:()=>window.__ci.fsEl});
+            document.documentElement.requestFullscreen=function(){window.__ci.fsRequests++;window.__ci.fsEl=document.documentElement;return Promise.resolve();};
+            document.exitFullscreen=function(){window.__ci.fsExits++;window.__ci.fsEl=null;return Promise.resolve();};
+            window.showDirectoryPicker=async function(){
+              window.__ci.pickerCalls++;
+              // Reproduce el comportamiento de seguridad de navegadores Chromium:
+              // el selector nativo saca a la pagina de fullscreen.
+              window.__ci.fsEl=null;
+              return {
+                name:'CI_EXPORTS',
+                async getDirectoryHandle(){ return this; },
+                async getFileHandle(filename){
+                  return {async createWritable(){return {
+                    async write(blob){window.__ci.writes.push({filename,type:blob.type,size:blob.size});},
+                    async close(){window.__ci.closed++;}
+                  };}};
+                }
+              };
+            };
+            window.fetch=async function(input,init){
+              const url=typeof input==='string'?input:(input&&input.url)||'';
+              if(url.includes('imedicom-access.imedica.workers.dev/validate')){
+                return new Response(JSON.stringify({valid:true,expiresAt:'2026-12-31T23:59:59Z'}),{status:200,headers:{'Content-Type':'application/json'}});
+              }
+              return realFetch(input,init);
+            };
+          })();
+          JS
+
+          cat > tests/post-harness.js <<'JS'
+          (function(){
+            const wait=ms=>new Promise(r=>setTimeout(r,ms));
+            const result=document.createElement('div'); result.id='ime-session-result'; result.style.display='none'; document.body.appendChild(result);
+            const finish=(s,d)=>{result.dataset.status=s;result.textContent=JSON.stringify(d||{});document.documentElement.dataset.sessionValidation=s;};
+            async function until(fn,label,loops=120){for(let i=0;i<loops;i++){const v=fn();if(v)return v;await wait(100);}throw new Error('timeout_'+label);}
+            (async()=>{
+              try{
+                await until(()=>document.documentElement.dataset.viewerIntegration,'viewer');
+                const root=document.getElementById('dv-root'), lock=document.getElementById('dv-lock-screen'), input=document.getElementById('dv-lock-input'), btn=document.getElementById('dv-lock-btn');
+                if(!root||!lock||!input||!btn) throw new Error('access_dom');
+                if(!root.classList.contains('dv-locked')) throw new Error('not_initially_locked');
+
+                input.value='VALID-CI'; btn.click();
+                await until(()=>!root.classList.contains('dv-locked'),'unlock');
+                if(window.__ci.fsRequests<1) throw new Error('fullscreen_not_requested_on_access_click');
+                const sess=JSON.parse(localStorage.getItem('dv_access_session')||'null');
+                if(!sess||sess.code!=='VALID-CI'||!sess.validatedAt) throw new Error('session_not_persisted');
+                const fsControls=document.getElementById('dv-fullscreen-controls');
+                if(!fsControls||!fsControls.classList.contains('dv-show')) throw new Error('fullscreen_controls_not_shown');
+
+                // Minimizar debe salir de fullscreen y armar retorno después de carga.
+                const min=document.getElementById('dv-fs-minimize'); if(!min) throw new Error('missing_minimize');
+                min.click(); await wait(30);
+                if(window.__ci.fsExits<1||window.__ci.fsEl) throw new Error('minimize_not_exiting');
+
+                const fileInput=document.getElementById('dv-file-input');
+                const blob=await (await fetch('tests/session.dcm')).blob(); const file=new File([blob],'session.dcm',{type:'application/dicom'}); const dt=new DataTransfer();dt.items.add(file);fileInput.files=dt.files;
+                const loaded=new Promise((resolve,reject)=>{window.addEventListener('imeDicom:file-loaded',resolve,{once:true});window.addEventListener('imeDicom:file-error',e=>reject(new Error(e.detail?.error||'file-error')),{once:true});});
+                fileInput.dispatchEvent(new Event('change',{bubbles:true})); await loaded; await wait(50);
+                if(window.__ci.fsRequests<2||window.__ci.fsEl!==document.documentElement) throw new Error('fullscreen_not_restored_after_load');
+
+                const exportBtn=document.getElementById('dv-export-main');
+                if(!exportBtn||exportBtn.disabled) throw new Error('export_not_enabled');
+                exportBtn.click();
+                await until(()=>window.__ci.writes.length>0,'folder_write');
+                if(window.__ci.pickerCalls!==1) throw new Error('picker_calls_'+window.__ci.pickerCalls);
+                const w=window.__ci.writes[0];
+                if(w.filename!=='SESSION SESS-001.png'||w.type!=='image/png'||w.size<50) throw new Error('bad_write_'+JSON.stringify(w));
+                if(window.__ci.closed<1) throw new Error('writer_not_closed');
+                const folderBtn=document.getElementById('dv-choose-folder');
+                if(!folderBtn||!folderBtn.classList.contains('dv-folder-active')||!folderBtn.title.includes('CI_EXPORTS')) throw new Error('folder_ui_not_updated');
+
+                // El selector de carpeta simuló la salida de fullscreen. finishExportProgress
+                // debe armar el retorno y el siguiente clic real debe solicitarlo otra vez.
+                if(window.__ci.fsEl) throw new Error('picker_did_not_exit_fullscreen');
+                const before=window.__ci.fsRequests;
+                document.body.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window})); await wait(50);
+                if(window.__ci.fsRequests<=before||window.__ci.fsEl!==document.documentElement) throw new Error('fullscreen_not_reentered_after_export');
+
+                // Un segundo export no debe volver a pedir carpeta: el handle se conserva en sesion.
+                exportBtn.click(); await until(()=>window.__ci.writes.length>1,'second_write');
+                if(window.__ci.pickerCalls!==1) throw new Error('folder_not_reused');
+
+                finish('pass',{access:true,session:true,fullscreenRequests:window.__ci.fsRequests,fullscreenExit:true,reenterAfterLoad:true,pickerCalls:window.__ci.pickerCalls,folderWrite:true,write:w,folderReuse:true});
+              }catch(err){finish('fail',{error:err.message,ci:window.__ci});}
+            })();
+          })();
+          JS
+
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('index.html').read_text()
+          marker='<script src="viewer-loader.js"></script>'
+          repl='<script src="tests/pre-harness.js"></script>\n'+marker+'\n<script src="tests/post-harness.js"></script>'
+          Path('session-test.html').write_text(s.replace(marker,repl))
+          PY
+      - name: Start server
+        run: python3 -m http.server 8080 >server-session.log 2>&1 &
+      - name: Exercise session fullscreen and folder save
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        shell: bash
+        run: |
+          sleep 2
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=22000 --dump-dom http://127.0.0.1:8080/session-test.html > dom-session.html 2> chrome-session.log || true
+          grep -q 'data-session-validation="pass"' dom-session.html
+          grep -q '"access":true' dom-session.html
+          grep -q '"session":true' dom-session.html
+          grep -q '"folderWrite":true' dom-session.html
+          grep -q '"folderReuse":true' dom-session.html
+          if grep -q 'data-session-validation="fail"' dom-session.html; then grep 'ime-session-result' dom-session.html >&2 || true; exit 1; fi
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: session-folder-fullscreen-validation
+          path: |
+            dom-session.html
+            chrome-session.log
+            server-session.log
+            tests/session.dcm
