@@ -17,7 +17,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for f in viewer-ui.js viewer-loader.js viewer-runtime.js viewer-load.js viewer-render.js viewer-tools.js viewer-export.js viewer-viewport.js viewer-annotation-interaction.js viewer-dicom-data.js dicom-core.js workstation-restoration.js; do
+          for f in viewer-ui.js viewer-loader.js viewer-runtime.js viewer-load.js viewer-render.js viewer-tools.js viewer-export.js viewer-viewport.js viewer-annotation-interaction.js viewer-dicom-data.js dicom-core.js workstation-restoration.js workstation-utilities.js; do
             node --check "$f"
           done
 
@@ -28,9 +28,11 @@ jobs:
           test -f assets/chest-watermark.svg
           test -f workstation-restoration.css
           test -f workstation-restoration.js
-          grep -q 'assets/chest-watermark.svg' viewer-premium.css
+          test -f workstation-utilities.js
+          grep -q 'assets/chest-watermark.svg' workstation-restoration.js
           grep -q 'workstation-restoration.css' index.html
           grep -q 'workstation-restoration.js' index.html
+          grep -q 'workstation-utilities.js' index.html
           grep -q 'appbar-tools' index.html
           grep -q 'Diseño' index.html
           grep -q 'Ayuda' index.html
@@ -42,7 +44,7 @@ jobs:
           grep -q 'WL/WW' workstation-restoration.js
           grep -q 'dv-invert' workstation-restoration.js
           grep -q 'dv-wlww-reset' workstation-restoration.js
-          grep -q 'display:flex!important' workstation-restoration.css
+          grep -q 'premium-focus-layout' workstation-utilities.js
 
       - name: Validate no clinical image payload was added
         shell: bash
@@ -74,6 +76,7 @@ jobs:
           curl -fsS http://127.0.0.1:8000/viewer-premium.css >/tmp/viewer-premium.css
           curl -fsS http://127.0.0.1:8000/workstation-restoration.css >/tmp/workstation-restoration.css
           curl -fsS http://127.0.0.1:8000/workstation-restoration.js >/tmp/workstation-restoration.js
+          curl -fsS http://127.0.0.1:8000/workstation-utilities.js >/tmp/workstation-utilities.js
           curl -fsS http://127.0.0.1:8000/assets/chest-watermark.svg >/tmp/chest-watermark.svg
           curl -fsS http://127.0.0.1:8000/workstation-preview.html >/tmp/workstation-preview.html
 
@@ -107,8 +110,10 @@ jobs:
           set -euo pipefail
           "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --virtual-time-budget=4500 --dump-dom http://127.0.0.1:8000/workstation-preview.html > /tmp/workstation-dom.html
           grep -q 'premium-bottom-dock' /tmp/workstation-dom.html
-          grep -q 'Cargue un estudio DICOM' /tmp/workstation-dom.html
+          grep -q 'premium-empty-overlay' /tmp/workstation-dom.html
+          grep -q 'No hay imagen cargada' /tmp/workstation-dom.html
           grep -q 'premium-study-status' /tmp/workstation-dom.html
+          grep -q 'data-premium-utility-bound="true"' /tmp/workstation-dom.html
 
       - name: Upload smoke screenshot
         uses: actions/upload-artifact@v4
