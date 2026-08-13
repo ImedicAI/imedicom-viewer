@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 980" role="img" aria-label="Marca de agua torácica estilizada">
+  <defs>
+    <radialGradient id="lungL" cx="58%" cy="42%" r="68%"><stop offset="0" stop-color="#d9e6ec" stop-opacity=".34"/><stop offset=".55" stop-color="#8da8b6" stop-opacity=".17"/><stop offset="1" stop-color="#253944" stop-opacity="0"/></radialGradient>
+    <radialGradient id="lungR" cx="42%" cy="42%" r="68%"><stop offset="0" stop-color="#d9e6ec" stop-opacity=".34"/><stop offset=".55" stop-color="#8da8b6" stop-opacity=".17"/><stop offset="1" stop-color="#253944" stop-opacity="0"/></radialGradient>
+    <linearGradient id="spine" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#d9e6ec" stop-opacity=".18"/><stop offset="1" stop-color="#718d9b" stop-opacity=".06"/></linearGradient>
+    <filter id="soft"><feGaussianBlur stdDeviation="7"/></filter>
+  </defs>
+  <rect width="720" height="980" fill="none"/>
+  <ellipse cx="250" cy="474" rx="178" ry="344" fill="url(#lungL)" filter="url(#soft)"/>
+  <ellipse cx="470" cy="474" rx="178" ry="344" fill="url(#lungR)" filter="url(#soft)"/>
+  <path d="M360 112 C344 238 346 358 355 486 C361 581 356 694 360 846" fill="none" stroke="url(#spine)" stroke-width="30" stroke-linecap="round"/>
+  <path d="M134 224 C232 160 302 152 359 168 C417 152 488 160 586 224" fill="none" stroke="#c8d8df" stroke-opacity=".10" stroke-width="11" stroke-linecap="round"/>
+  <g fill="none" stroke="#b9cdd6" stroke-opacity=".075" stroke-width="8" stroke-linecap="round">
+    <path d="M142 268 C222 222 286 211 350 223"/><path d="M578 268 C498 222 434 211 370 223"/>
+    <path d="M121 329 C216 280 286 274 350 287"/><path d="M599 329 C504 280 434 274 370 287"/>
+    <path d="M108 397 C205 346 285 342 350 355"/><path d="M612 397 C515 346 435 342 370 355"/>
+    <path d="M104 468 C200 420 282 413 350 427"/><path d="M616 468 C520 420 438 413 370 427"/>
+    <path d="M111 544 C202 500 281 492 350 503"/><path d="M609 544 C518 500 439 492 370 503"/>
+    <path d="M126 621 C211 585 285 575 350 585"/><path d="M594 621 C509 585 435 575 370 585"/>
+    <path d="M151 699 C224 670 290 659 350 669"/><path d="M569 699 C496 670 430 659 370 669"/>
+  </g>
+  <path d="M332 458 C290 501 292 603 333 665 C362 708 420 704 445 655 C469 608 456 520 401 474 C383 459 352 447 332 458Z" fill="#d7e4ea" fill-opacity=".07" filter="url(#soft)"/>
+  <path d="M180 805 C260 850 315 861 360 853 C405 861 460 850 540 805" fill="none" stroke="#c8d8df" stroke-opacity=".07" stroke-width="12" stroke-linecap="round"/>
+</svg>
