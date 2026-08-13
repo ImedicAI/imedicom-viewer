@@ -73,10 +73,21 @@
     },true);
   }
 
+  function ensureEmptyOverlay(panel){
+    let overlay=panel.querySelector('.premium-empty-overlay');
+    if(overlay) return overlay;
+    overlay=document.createElement('div');
+    overlay.className='premium-empty-overlay';
+    overlay.innerHTML='<img class="premium-empty-watermark" src="assets/chest-watermark.svg" alt="" aria-hidden="true"><div class="premium-empty-vignette"></div><div class="premium-empty-message"><div class="premium-empty-symbol"><span class="premium-empty-plus">+</span></div><div class="premium-empty-title">No hay imagen cargada</div><div class="premium-empty-copy">Carga archivos DICOM para comenzar<br>o arrastra y suelta tus archivos en el panel izquierdo.</div></div>';
+    panel.appendChild(overlay);
+    return overlay;
+  }
+
   function ensureDock(){
     const panel=document.getElementById('dv-quad-imagen');
     const wrap=document.getElementById('dv-viewer-wrap');
     if(!panel||!wrap||document.querySelector('.premium-bottom-dock')) return false;
+    const overlay=ensureEmptyOverlay(panel);
     const dock=document.createElement('div'); dock.className='premium-bottom-dock'; dock.setAttribute('aria-label','Controles rápidos del visor');
     const fit=btn('fit','Ajustar','fit','Ajustar imagen al área de visualización');
     const zoom=btn('zoom','Zoom','zoom','Activar zoom interactivo'); zoom.dataset.mode='zoom';
@@ -98,7 +109,12 @@
     wireSyntheticModes();
     const canvas=document.getElementById('dv-canvas');
     if(canvas){
-      const refresh=()=>{status.textContent=canvas.style.display==='none'?'Sin imagen':'Imagen activa'; if(canvas.style.display==='none') setMode('none');};
+      const refresh=()=>{
+        const empty=canvas.style.display==='none'||getComputedStyle(canvas).display==='none';
+        status.textContent=empty?'Sin imagen':'Imagen activa';
+        overlay.classList.toggle('hidden',!empty);
+        if(empty) setMode('none');
+      };
       refresh();
       new MutationObserver(refresh).observe(canvas,{attributes:true,attributeFilter:['style','class']});
     }
