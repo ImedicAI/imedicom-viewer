@@ -1,0 +1,84 @@
+name: Workstation restoration validation
+
+on:
+  push:
+    branches:
+      - ui/workstation-premium-restoration
+  workflow_dispatch:
+
+jobs:
+  workstation-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in viewer-ui.js viewer-loader.js viewer-runtime.js viewer-load.js viewer-render.js viewer-tools.js viewer-export.js viewer-viewport.js viewer-annotation-interaction.js viewer-dicom-data.js dicom-core.js; do
+            node --check "$f"
+          done
+
+      - name: Validate restored workstation assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f assets/chest-watermark.svg
+          grep -q 'assets/chest-watermark.svg' viewer-premium.css
+          grep -q 'appbar-tools' index.html
+          grep -q 'Diseño' index.html
+          grep -q 'Ayuda' index.html
+          grep -q 'Ajustes' index.html
+          grep -q 'premium-tool-icon' viewer-ui.js
+          grep -q 'premium-study-status' viewer-ui.js
+          grep -q 'MutationObserver' viewer-ui.js
+
+      - name: Validate no clinical image payload was added
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find assets -type f \( -iname '*.dcm' -o -iname '*.dicom' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print | grep -q .; then
+            echo 'Unexpected binary/clinical-looking image asset found under assets/' >&2
+            exit 1
+          fi
+
+      - name: Start static server
+        shell: bash
+        run: |
+          python3 -m http.server 8000 >/tmp/imed_server.log 2>&1 &
+          echo $! >/tmp/imed_server.pid
+          sleep 2
+          curl -fsS http://127.0.0.1:8000/index.html >/tmp/index.html
+          curl -fsS http://127.0.0.1:8000/viewer-premium.css >/tmp/viewer-premium.css
+          curl -fsS http://127.0.0.1:8000/assets/chest-watermark.svg >/tmp/chest-watermark.svg
+
+      - name: Find Chromium
+        id: browser
+        shell: bash
+        run: |
+          set -e
+          for b in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then
+              echo "bin=$(command -v "$b")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          exit 1
+
+      - name: Render workstation smoke screenshot
+        shell: bash
+        env:
+          BROWSER_BIN: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -euo pipefail
+          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1600,900 --screenshot=/tmp/workstation.png http://127.0.0.1:8000/ || true
+          test -s /tmp/workstation.png
+
+      - name: Upload smoke screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: workstation-restoration-smoke
+          path: /tmp/workstation.png
+          if-no-files-found: error
