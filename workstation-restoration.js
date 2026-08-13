@@ -31,9 +31,10 @@
     if(!canvas||canvas.style.display==='none') return;
     if(indicator&&getComputedStyle(indicator).display!=='none') return;
     const r=canvas.getBoundingClientRect();
-    canvas.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,button:0,buttons:1}));
-    canvas.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,button:0,buttons:0}));
-    canvas.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:r.left+r.width/2,clientY:r.top+r.height/2,button:0}));
+    const cx=r.left+r.width/2, cy=r.top+r.height/2;
+    canvas.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,clientX:cx,clientY:cy,button:0,buttons:1}));
+    canvas.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,clientX:cx,clientY:cy,button:0,buttons:0}));
+    canvas.dispatchEvent(new MouseEvent('click',{bubbles:true,clientX:cx,clientY:cy,button:0}));
   }
 
   function resetZoomToFit(){
@@ -42,8 +43,9 @@
     if(!canvas||canvas.style.display==='none'||!wrap) return;
     ensureInteractiveZoom();
     const r=canvas.getBoundingClientRect();
+    const cx=r.left+r.width/2, cy=r.top+r.height/2;
     for(let i=0;i<60;i++){
-      wrap.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:120,clientX:r.left+r.width/2,clientY:r.top+r.height/2}));
+      wrap.dispatchEvent(new WheelEvent('wheel',{bubbles:true,cancelable:true,deltaY:120,clientX:cx,clientY:cy}));
     }
     requestAnimationFrame(()=>{ if(window.fitCanvasToContainer) window.fitCanvasToContainer(); wrap.scrollLeft=0; wrap.scrollTop=0; });
   }
@@ -72,8 +74,9 @@
   }
 
   function ensureDock(){
+    const panel=document.getElementById('dv-quad-imagen');
     const wrap=document.getElementById('dv-viewer-wrap');
-    if(!wrap||document.querySelector('.premium-bottom-dock')) return false;
+    if(!panel||!wrap||document.querySelector('.premium-bottom-dock')) return false;
     const dock=document.createElement('div'); dock.className='premium-bottom-dock'; dock.setAttribute('aria-label','Controles rápidos del visor');
     const fit=btn('fit','Ajustar','fit','Ajustar imagen al área de visualización');
     const zoom=btn('zoom','Zoom','zoom','Activar zoom interactivo'); zoom.dataset.mode='zoom';
@@ -84,8 +87,8 @@
     [fit,zoom,pan,win].forEach(b=>dock.appendChild(b));
     const d=document.createElement('span'); d.className='premium-dock-divider'; dock.appendChild(d);
     [inv,reset].forEach(b=>dock.appendChild(b));
-    wrap.appendChild(dock);
-    const status=document.createElement('div'); status.className='premium-dock-status'; status.textContent='Sin imagen'; wrap.appendChild(status);
+    panel.appendChild(dock);
+    const status=document.createElement('div'); status.className='premium-dock-status'; status.textContent='Sin imagen'; panel.appendChild(status);
     fit.addEventListener('click',resetZoomToFit);
     zoom.addEventListener('click',()=>setMode('zoom'));
     pan.addEventListener('click',()=>setMode('pan'));
@@ -95,7 +98,9 @@
     wireSyntheticModes();
     const canvas=document.getElementById('dv-canvas');
     if(canvas){
-      new MutationObserver(()=>{status.textContent=canvas.style.display==='none'?'Sin imagen':'Imagen activa'; if(canvas.style.display==='none') setMode('none');}).observe(canvas,{attributes:true,attributeFilter:['style','class']});
+      const refresh=()=>{status.textContent=canvas.style.display==='none'?'Sin imagen':'Imagen activa'; if(canvas.style.display==='none') setMode('none');};
+      refresh();
+      new MutationObserver(refresh).observe(canvas,{attributes:true,attributeFilter:['style','class']});
     }
     return true;
   }
