@@ -17,7 +17,11 @@
   <nav class="nav" aria-label="Navegación principal">
     <button class="active" type="button">Visor</button>
   </nav>
-  <div class="appbar-spacer" aria-hidden="true"></div>
+  <nav class="appbar-tools" aria-label="Utilidades del visor">
+    <button type="button" class="appbar-tool" title="Diseño" aria-label="Diseño"><span class="appbar-tool-icon" aria-hidden="true">⊞</span><span>Diseño</span></button>
+    <button type="button" class="appbar-tool" title="Ayuda" aria-label="Ayuda"><span class="appbar-tool-icon appbar-help" aria-hidden="true">?</span><span>Ayuda</span></button>
+    <button type="button" class="appbar-tool" title="Ajustes" aria-label="Ajustes"><span class="appbar-tool-icon" aria-hidden="true">⚙</span><span>Ajustes</span></button>
+  </nav>
 </header>
 <main id="viewerMount"><div id="viewerBoot">Inicializando visor DICOM…</div></main>
 <script src="dicom-core.js"></script>
