@@ -44,6 +44,17 @@ jobs:
             exit 1
           fi
 
+      - name: Build unlocked visual preview harness
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('index.html').read_text()
+          hook='''<script>\nsetTimeout(()=>{\n  const root=document.getElementById('dv-root');\n  const lock=document.getElementById('dv-lock-screen');\n  if(root) root.classList.remove('dv-locked');\n  if(lock) lock.classList.add('dv-hidden');\n  if(window.imeDicomUi?.applyPremiumDom) window.imeDicomUi.applyPremiumDom();\n},1200);\n</script>'''
+          p=p.replace('</body>',hook+'\n</body>')
+          Path('workstation-preview.html').write_text(p)
+          PY
+
       - name: Start static server
         shell: bash
         run: |
@@ -53,6 +64,7 @@ jobs:
           curl -fsS http://127.0.0.1:8000/index.html >/tmp/index.html
           curl -fsS http://127.0.0.1:8000/viewer-premium.css >/tmp/viewer-premium.css
           curl -fsS http://127.0.0.1:8000/assets/chest-watermark.svg >/tmp/chest-watermark.svg
+          curl -fsS http://127.0.0.1:8000/workstation-preview.html >/tmp/workstation-preview.html
 
       - name: Find Chromium
         id: browser
@@ -67,13 +79,13 @@ jobs:
           done
           exit 1
 
-      - name: Render workstation smoke screenshot
+      - name: Render workstation preview screenshot
         shell: bash
         env:
           BROWSER_BIN: ${{ steps.browser.outputs.bin }}
         run: |
           set -euo pipefail
-          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1600,900 --screenshot=/tmp/workstation.png http://127.0.0.1:8000/ || true
+          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1600,900 --virtual-time-budget=3500 --screenshot=/tmp/workstation.png http://127.0.0.1:8000/workstation-preview.html || true
           test -s /tmp/workstation.png
 
       - name: Upload smoke screenshot
