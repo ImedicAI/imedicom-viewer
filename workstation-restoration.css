@@ -1,0 +1,18 @@
+/* Focused workstation restoration overrides. Loaded after viewer-premium.css. */
+#dv-empty{display:flex!important;}
+#dv-viewer-wrap::before{opacity:.96!important;filter:saturate(.68) contrast(1.16)!important;background-size:100% 100%,min(72%,720px) auto!important;}
+#dv-viewer-wrap::after{background:radial-gradient(ellipse at center,transparent 50%,rgba(0,0,0,.16) 100%)!important;}
+
+.premium-bottom-dock{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:35;display:flex;align-items:center;gap:5px;padding:5px 7px;border:1px solid #27404e;border-radius:8px;background:rgba(7,16,23,.94);box-shadow:0 8px 28px rgba(0,0,0,.28);backdrop-filter:blur(5px);}
+.premium-bottom-dock button{height:34px;min-width:58px;border:1px solid transparent;border-radius:5px;background:transparent;color:#aebbc4;padding:0 9px;font:500 10.5px 'IBM Plex Sans',sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;white-space:nowrap;}
+.premium-bottom-dock button:hover{background:#11232d;border-color:#2b4655;color:#e8eef2;}
+.premium-bottom-dock button.active{background:rgba(37,201,192,.13);border-color:#25c9c0;color:#3bd6ce;}
+.premium-bottom-dock svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;}
+.premium-bottom-dock .premium-dock-divider{width:1px;height:20px;background:#263946;margin:0 2px;}
+.premium-dock-status{position:absolute;right:16px;bottom:18px;z-index:34;color:#8fa0ae;font:500 10px 'IBM Plex Mono',monospace;background:rgba(5,12,17,.64);border:1px solid rgba(39,64,78,.55);border-radius:5px;padding:5px 7px;pointer-events:none;}
+
+#dv-quad-herramientas .premium-transform-opener-row{display:none!important;}
+#dv-quad-herramientas .premium-transform-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important;}
+
+@media(max-width:1120px){.premium-bottom-dock{bottom:12px}.premium-bottom-dock button{min-width:44px;padding:0 7px}.premium-bottom-dock .premium-dock-label{display:none}.premium-dock-status{display:none}}
+@media(max-width:900px){.premium-bottom-dock{position:fixed;bottom:8px;max-width:calc(100vw - 16px);overflow-x:auto}.premium-bottom-dock button{flex:0 0 auto}}
