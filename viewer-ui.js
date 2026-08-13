@@ -71,6 +71,31 @@
     });
   }
 
+  function ensureStudyStatus(){
+    const left=document.querySelector('.dv-left-col');
+    const list=document.getElementById('dv-filelist');
+    if(!left||!list) return;
+    let status=document.getElementById('premium-study-status');
+    if(!status){
+      status=document.createElement('div');
+      status.id='premium-study-status';
+      status.className='premium-study-status';
+      status.innerHTML='<span class="premium-status-dot" aria-hidden="true"></span><span class="premium-study-count">0 estudio(s) cargado(s)</span>';
+      left.appendChild(status);
+    }
+    const update=()=>{
+      const count=list.querySelectorAll('.dv-file-item').length;
+      const label=status.querySelector('.premium-study-count');
+      if(label) label.textContent=`${count} estudio(s) cargado(s)`;
+      status.classList.toggle('has-studies',count>0);
+    };
+    update();
+    if(list.dataset.premiumStatusObserved!=='true'){
+      list.dataset.premiumStatusObserved='true';
+      new MutationObserver(update).observe(list,{childList:true,subtree:false});
+    }
+  }
+
   function applyPremiumDom(){
     const empty=document.getElementById('dv-empty');
     if(empty){
@@ -91,8 +116,9 @@
     }
 
     decorateToolButtons();
+    ensureStudyStatus();
     initPrivacyWarningToggle();
   }
 
-  window.imeDicomUi={applyPremiumDom,initPrivacyWarningToggle,decorateToolButtons};
+  window.imeDicomUi={applyPremiumDom,initPrivacyWarningToggle,decorateToolButtons,ensureStudyStatus};
 })();
