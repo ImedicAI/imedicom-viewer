@@ -20,6 +20,8 @@ The split-shell runtime has passed the complete validation suite covering runtim
 
 The workstation restoration was also validated in Chromium before merge, including DOM checks, synthetic empty-state rendering, tool controls, DICOM render transformations, measurements, export, access/session/fullscreen behavior and a 2660×2180 MONOCHROME1 large-matrix test.
 
+After deployment, the complete eight-workflow regression set was dispatched directly against `main` and all eight runs completed successfully: runtime, UI controls, tools/measurements, export, regression/orientation, session/folder/fullscreen, large-matrix performance, and workstation restoration validation. A separate post-deploy smoke workflow also validates the production workstation DOM on every `main` update.
+
 No clinical DICOM or PHI is stored in the repository or CI artifacts.
 
 ## Real clinical DICOM validation performed locally
