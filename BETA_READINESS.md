@@ -22,6 +22,8 @@ The workstation restoration was also validated in Chromium before merge, includi
 
 After deployment, the complete eight-workflow regression set was dispatched directly against `main` and all eight runs completed successfully: runtime, UI controls, tools/measurements, export, regression/orientation, session/folder/fullscreen, large-matrix performance, and workstation restoration validation. A separate post-deploy smoke workflow also validates the production workstation DOM on every `main` update.
 
+A live-production GitHub Pages smoke test now opens the public URL itself, verifies that the workstation assets and thorax watermark are served, and confirms in Chromium that the live page mounts the viewer root/canvas and integration state successfully. The first live-production run completed successfully and the check remains scheduled for daily execution in addition to production-file updates.
+
 No clinical DICOM or PHI is stored in the repository or CI artifacts.
 
 ## Real clinical DICOM validation performed locally
