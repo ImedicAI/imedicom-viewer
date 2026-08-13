@@ -1,6 +1,18 @@
 name: Pages live smoke
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'viewer-*.js'
+      - 'viewer-*.html'
+      - 'viewer-*.css'
+      - 'workstation-*.js'
+      - 'workstation-*.css'
+      - 'dicom-core.js'
+      - 'assets/**'
+      - '.github/workflows/pages-live-smoke.yml'
   workflow_dispatch:
   schedule:
     - cron: '17 8 * * *'
