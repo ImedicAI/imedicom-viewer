@@ -52,6 +52,18 @@ jobs:
 
                 if(!window.imeDicomRuntime || typeof window.imeDicomRuntime.requestFullscreen!=='function') throw new Error('runtime_fullscreen_missing');
                 if(!window.imeDicomAccess || typeof window.imeDicomAccess.init!=='function') throw new Error('access_runtime_missing');
+                if(!window.imeDicomLoad || typeof window.imeDicomLoad.shouldAutoOrient!=='function') throw new Error('orientation_guard_missing');
+
+                const orient=window.imeDicomLoad.shouldAutoOrient;
+                const carestreamChest={manufacturer:'Carestream Health',presentationIntentType:'FOR PROCESSING',isChestBodyPart:true,isSpineBodyPart:false};
+                const kneePresentation={manufacturer:'CareCom DXR',presentationIntentType:'FOR PRESENTATION',isChestBodyPart:false,isSpineBodyPart:false};
+                const carestreamChestPresentation={manufacturer:'Carestream Health',presentationIntentType:'FOR PRESENTATION',isChestBodyPart:true,isSpineBodyPart:false};
+                const spineProcessing={manufacturer:'Carestream Health',presentationIntentType:'FOR PROCESSING',isChestBodyPart:false,isSpineBodyPart:true};
+                const portrait={rows:2660,cols:2180};
+                if(!orient(carestreamChest,portrait)) throw new Error('validated_carestream_chest_not_oriented');
+                if(orient(kneePresentation,{rows:2209,cols:1196})) throw new Error('knee_would_be_auto_oriented');
+                if(orient(carestreamChestPresentation,portrait)) throw new Error('for_presentation_chest_would_be_auto_oriented');
+                if(orient(spineProcessing,{rows:2994,cols:1784})) throw new Error('spine_would_be_auto_oriented');
 
                 const warn=document.getElementById('dv-warn-toggle');
                 if(!warn) throw new Error('privacy_toggle_missing');
@@ -85,6 +97,7 @@ jobs:
                   lockedInitial:true,
                   fullscreenHiddenWhileLocked:true,
                   runtimeFullscreen:true,
+                  orientationGuard:true,
                   privacyToggle:true,
                   privacyReversible:true,
                   emptyCodeStaysLocked:true
@@ -108,6 +121,7 @@ jobs:
           sleep 2
           "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage --virtual-time-budget=12000 --dump-dom http://127.0.0.1:8080/regression-test.html > dom-regression.html 2> chrome-regression.log || true
           grep -q 'data-regression-validation="pass"' dom-regression.html
+          grep -q '"orientationGuard":true' dom-regression.html
           grep -q '"privacyToggle":true' dom-regression.html
           grep -q '"emptyCodeStaysLocked":true' dom-regression.html
           if grep -q 'data-regression-validation="fail"' dom-regression.html; then grep 'ime-regression-result' dom-regression.html >&2 || true; exit 1; fi
