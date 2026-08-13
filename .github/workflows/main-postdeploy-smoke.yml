@@ -1,0 +1,120 @@
+name: Main post-deploy smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate production assets
+        shell: bash
+        run: |
+          set -e
+          test -f index.html
+          test -f viewer-shell.html
+          test -f workstation-restoration.css
+          test -f workstation-restoration.js
+          test -f workstation-utilities.js
+          grep -q 'workstation-restoration.css' index.html
+          grep -q 'workstation-restoration.js' index.html
+          grep -q 'workstation-utilities.js' index.html
+          grep -q 'viewer-loader.js' index.html
+          ! grep -q 'viewer-source.html' viewer-loader.js
+          node --check viewer-ui.js
+          node --check viewer-loader.js
+          node --check workstation-restoration.js
+          node --check workstation-utilities.js
+
+      - name: Find Chromium
+        id: browser
+        shell: bash
+        run: |
+          set -e
+          for b in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then
+              echo "bin=$(command -v "$b")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          exit 1
+
+      - name: Build unlocked production smoke page
+        shell: bash
+        run: |
+          mkdir -p tests
+          cat > tests/main-smoke.js <<'JS'
+          (async()=>{
+            const wait=ms=>new Promise(r=>setTimeout(r,ms));
+            const result=document.createElement('div');
+            result.id='ime-main-smoke-result';
+            result.style.display='none';
+            document.body.appendChild(result);
+            const finish=(s,d)=>{result.dataset.status=s;result.textContent=JSON.stringify(d||{});document.documentElement.dataset.mainSmoke=s;};
+            try{
+              for(let i=0;i<120;i++){
+                if(document.documentElement.dataset.viewerIntegration) break;
+                await wait(100);
+              }
+              if(!document.documentElement.dataset.viewerIntegration) throw new Error('viewer_not_ready');
+              const root=document.getElementById('dv-root');
+              const lock=document.getElementById('dv-lock-screen');
+              if(!root) throw new Error('root_missing');
+              root.classList.remove('dv-locked');
+              if(lock) lock.classList.add('dv-hidden');
+              await wait(100);
+              const required=[
+                'dv-viewer-wrap','dv-quad-herramientas','premium-study-status',
+                'premium-bottom-dock','premium-empty-overlay'
+              ];
+              for(const id of required){ if(!document.getElementById(id)) throw new Error('missing_'+id); }
+              const tools=[...document.querySelectorAll('#dv-quad-herramientas .premium-icon-button')];
+              if(tools.length<6) throw new Error('premium_icons_'+tools.length);
+              const utilities=[...document.querySelectorAll('.appbar-tool')];
+              if(utilities.length<3) throw new Error('utility_controls_'+utilities.length);
+              finish('pass',{premiumIcons:tools.length,utilities:utilities.length});
+            }catch(err){finish('fail',{error:err.message});}
+          })();
+          JS
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path('index.html').read_text()
+          Path('main-smoke.html').write_text(s.replace('</body>','<script src="tests/main-smoke.js"></script>\n</body>'))
+          PY
+
+      - name: Start static server
+        run: |
+          python3 -m http.server 8080 >server-main-smoke.log 2>&1 &
+          sleep 2
+
+      - name: Exercise production DOM
+        shell: bash
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        run: |
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --virtual-time-budget=16000 --window-size=1600,1000 \
+            --dump-dom --screenshot=main-workstation.png \
+            http://127.0.0.1:8080/main-smoke.html > dom-main-smoke.html 2> chrome-main-smoke.log || true
+          grep -q 'data-main-smoke="pass"' dom-main-smoke.html
+          grep -q '"utilities":3' dom-main-smoke.html
+          if grep -q 'data-main-smoke="fail"' dom-main-smoke.html; then
+            grep 'ime-main-smoke-result' dom-main-smoke.html >&2 || true
+            exit 1
+          fi
+
+      - name: Upload production smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: main-postdeploy-smoke
+          path: |
+            main-workstation.png
+            dom-main-smoke.html
+            chrome-main-smoke.log
+            server-main-smoke.log
