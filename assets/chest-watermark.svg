@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 980" role="img" aria-label="Marca de agua torácica radiográfica sintética">
+  <defs>
+    <radialGradient id="thoraxGlow" cx="50%" cy="46%" r="58%">
+      <stop offset="0" stop-color="#e5edf1" stop-opacity=".22"/>
+      <stop offset=".58" stop-color="#a6bac4" stop-opacity=".10"/>
+      <stop offset="1" stop-color="#4f6874" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lungL" cx="56%" cy="43%" r="71%">
+      <stop offset="0" stop-color="#03080b" stop-opacity=".82"/>
+      <stop offset=".72" stop-color="#111c23" stop-opacity=".56"/>
+      <stop offset="1" stop-color="#314650" stop-opacity=".08"/>
+    </radialGradient>
+    <radialGradient id="lungR" cx="44%" cy="43%" r="71%">
+      <stop offset="0" stop-color="#03080b" stop-opacity=".82"/>
+      <stop offset=".72" stop-color="#111c23" stop-opacity=".56"/>
+      <stop offset="1" stop-color="#314650" stop-opacity=".08"/>
+    </radialGradient>
+    <linearGradient id="bone" x1="0" y1="0" x2="0" y2="1">
+      <stop stop-color="#f0f4f6" stop-opacity=".34"/>
+      <stop offset="1" stop-color="#aebfc7" stop-opacity=".12"/>
+    </linearGradient>
+    <linearGradient id="mediastinum" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#b9c9d0" stop-opacity=".07"/>
+      <stop offset=".5" stop-color="#e4ecef" stop-opacity=".20"/>
+      <stop offset="1" stop-color="#b9c9d0" stop-opacity=".07"/>
+    </linearGradient>
+    <filter id="soft8"><feGaussianBlur stdDeviation="8"/></filter>
+    <filter id="soft3"><feGaussianBlur stdDeviation="3"/></filter>
+    <filter id="boneGlow"><feGaussianBlur stdDeviation="1.6"/></filter>
+  </defs>
+
+  <rect width="820" height="980" fill="none"/>
+  <ellipse cx="410" cy="475" rx="335" ry="405" fill="url(#thoraxGlow)" filter="url(#soft8)"/>
+
+  <!-- Soft-tissue thoracic envelope -->
+  <path d="M188 172 C245 111 322 89 410 91 C498 89 575 111 632 172 C688 232 711 345 699 492 C689 616 649 756 581 834 C527 896 477 918 410 920 C343 918 293 896 239 834 C171 756 131 616 121 492 C109 345 132 232 188 172Z" fill="#c5d3d9" fill-opacity=".055" filter="url(#soft8)"/>
+
+  <!-- Lung fields, asymmetric like a frontal radiograph -->
+  <path d="M214 203 C262 150 334 142 373 175 C391 191 394 229 392 286 L383 724 C356 808 295 842 244 811 C195 780 168 699 155 598 C140 482 148 352 173 271 C182 242 194 220 214 203Z" fill="url(#lungL)"/>
+  <path d="M606 203 C558 150 486 142 447 175 C429 191 426 229 428 286 L437 727 C460 805 519 843 574 811 C625 780 653 696 665 592 C679 473 670 349 646 271 C637 242 626 220 606 203Z" fill="url(#lungR)"/>
+
+  <!-- Mediastinum / cardiac silhouette -->
+  <path d="M389 176 C373 259 379 336 389 405 C372 443 363 488 367 548 C371 617 388 710 424 759 C460 808 521 807 552 756 C584 704 570 616 544 555 C520 499 480 459 443 436 C438 356 442 267 431 181Z" fill="url(#mediastinum)" filter="url(#soft3)"/>
+  <path d="M391 179 C398 320 400 510 402 858" fill="none" stroke="url(#bone)" stroke-width="22" stroke-linecap="round" opacity=".42" filter="url(#soft3)"/>
+
+  <!-- Vertebral bodies -->
+  <g fill="#d9e3e7" fill-opacity=".13" filter="url(#boneGlow)">
+    <rect x="390" y="213" width="38" height="28" rx="7"/><rect x="389" y="254" width="40" height="29" rx="7"/><rect x="388" y="296" width="42" height="30" rx="7"/><rect x="388" y="340" width="42" height="31" rx="7"/><rect x="387" y="386" width="44" height="32" rx="7"/><rect x="387" y="434" width="44" height="33" rx="7"/><rect x="386" y="484" width="46" height="34" rx="7"/><rect x="386" y="536" width="46" height="35" rx="7"/><rect x="385" y="591" width="48" height="36" rx="7"/>
+  </g>
+
+  <!-- Clavicles -->
+  <path d="M188 207 C259 151 324 151 385 194" fill="none" stroke="url(#bone)" stroke-width="12" stroke-linecap="round" filter="url(#boneGlow)"/>
+  <path d="M632 207 C561 151 496 151 435 194" fill="none" stroke="url(#bone)" stroke-width="12" stroke-linecap="round" filter="url(#boneGlow)"/>
+
+  <!-- Scapular shadows -->
+  <path d="M164 229 C224 260 263 314 286 392 C306 459 316 529 303 592" fill="none" stroke="#d2dde1" stroke-opacity=".10" stroke-width="16" stroke-linecap="round" filter="url(#soft3)"/>
+  <path d="M656 229 C596 260 557 314 534 392 C514 459 504 529 517 592" fill="none" stroke="#d2dde1" stroke-opacity=".10" stroke-width="16" stroke-linecap="round" filter="url(#soft3)"/>
+
+  <!-- Ribs -->
+  <g fill="none" stroke="#dce5e9" stroke-opacity=".115" stroke-width="8" stroke-linecap="round" filter="url(#boneGlow)">
+    <path d="M177 278 C248 232 322 225 388 247"/><path d="M643 278 C572 232 498 225 432 247"/>
+    <path d="M157 338 C239 288 320 286 389 306"/><path d="M663 338 C581 288 500 286 431 306"/>
+    <path d="M145 402 C231 352 317 351 389 371"/><path d="M675 402 C589 352 503 351 431 371"/>
+    <path d="M141 471 C229 422 316 419 389 439"/><path d="M679 471 C591 422 504 419 431 439"/>
+    <path d="M145 543 C231 498 316 492 389 510"/><path d="M675 543 C589 498 504 492 431 510"/>
+    <path d="M155 616 C238 576 318 568 389 586"/><path d="M665 616 C582 576 502 568 431 586"/>
+    <path d="M174 691 C251 656 322 646 389 662"/><path d="M646 691 C569 656 498 646 431 662"/>
+    <path d="M201 766 C269 738 328 728 389 741"/><path d="M619 766 C551 738 492 728 431 741"/>
+  </g>
+
+  <!-- Hilar / vascular markings -->
+  <g fill="none" stroke="#d3dfe4" stroke-opacity=".11" stroke-width="5" stroke-linecap="round" filter="url(#soft3)">
+    <path d="M385 385 C338 396 298 420 265 456 M357 415 C319 449 291 488 275 531 M348 454 C321 507 307 566 306 621"/>
+    <path d="M435 385 C482 396 522 420 555 456 M463 415 C501 449 529 488 545 531 M472 454 C499 507 513 566 514 621"/>
+  </g>
+
+  <!-- Diaphragms -->
+  <path d="M176 797 C246 744 322 747 390 789" fill="none" stroke="#d9e3e7" stroke-opacity=".16" stroke-width="11" stroke-linecap="round" filter="url(#soft3)"/>
+  <path d="M644 791 C574 741 502 749 438 792" fill="none" stroke="#d9e3e7" stroke-opacity=".16" stroke-width="11" stroke-linecap="round" filter="url(#soft3)"/>
+
+  <!-- Central subtle film bloom -->
+  <ellipse cx="410" cy="480" rx="305" ry="380" fill="none" stroke="#b9c9d0" stroke-opacity=".035" stroke-width="12"/>
+</svg>

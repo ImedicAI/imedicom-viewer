@@ -2,7 +2,7 @@ name: Session folder fullscreen validation
 
 on:
   push:
-    branches: [redesign/radiology-dark-premium]
+    branches: [redesign/radiology-dark-premium, ui/workstation-premium-restoration]
   workflow_dispatch:
 
 jobs:
@@ -53,8 +53,6 @@ jobs:
             document.exitFullscreen=function(){window.__ci.fsExits++;window.__ci.fsEl=null;return Promise.resolve();};
             window.showDirectoryPicker=async function(){
               window.__ci.pickerCalls++;
-              // Reproduce el comportamiento de seguridad de navegadores Chromium:
-              // el selector nativo saca a la pagina de fullscreen.
               window.__ci.fsEl=null;
               return {
                 name:'CI_EXPORTS',
@@ -98,7 +96,6 @@ jobs:
                 const fsControls=document.getElementById('dv-fullscreen-controls');
                 if(!fsControls||!fsControls.classList.contains('dv-show')) throw new Error('fullscreen_controls_not_shown');
 
-                // Minimizar debe salir de fullscreen y armar retorno después de carga.
                 const min=document.getElementById('dv-fs-minimize'); if(!min) throw new Error('missing_minimize');
                 min.click(); await wait(30);
                 if(window.__ci.fsExits<1||window.__ci.fsEl) throw new Error('minimize_not_exiting');
@@ -120,14 +117,11 @@ jobs:
                 const folderBtn=document.getElementById('dv-choose-folder');
                 if(!folderBtn||!folderBtn.classList.contains('dv-folder-active')||!folderBtn.title.includes('CI_EXPORTS')) throw new Error('folder_ui_not_updated');
 
-                // El selector de carpeta simuló la salida de fullscreen. finishExportProgress
-                // debe armar el retorno y el siguiente clic real debe solicitarlo otra vez.
                 if(window.__ci.fsEl) throw new Error('picker_did_not_exit_fullscreen');
                 const before=window.__ci.fsRequests;
                 document.body.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window})); await wait(50);
                 if(window.__ci.fsRequests<=before||window.__ci.fsEl!==document.documentElement) throw new Error('fullscreen_not_reentered_after_export');
 
-                // Un segundo export no debe volver a pedir carpeta: el handle se conserva en sesion.
                 exportBtn.click(); await until(()=>window.__ci.writes.length>1,'second_write');
                 if(window.__ci.pickerCalls!==1) throw new Error('folder_not_reused');
 

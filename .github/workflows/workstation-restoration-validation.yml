@@ -1,0 +1,123 @@
+name: Workstation restoration validation
+
+on:
+  push:
+    branches:
+      - ui/workstation-premium-restoration
+  workflow_dispatch:
+
+jobs:
+  workstation-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in viewer-ui.js viewer-loader.js viewer-runtime.js viewer-load.js viewer-render.js viewer-tools.js viewer-export.js viewer-viewport.js viewer-annotation-interaction.js viewer-dicom-data.js dicom-core.js workstation-restoration.js workstation-utilities.js; do
+            node --check "$f"
+          done
+
+      - name: Validate restored workstation assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f assets/chest-watermark.svg
+          test -f workstation-restoration.css
+          test -f workstation-restoration.js
+          test -f workstation-utilities.js
+          grep -q 'assets/chest-watermark.svg' workstation-restoration.js
+          grep -q 'workstation-restoration.css' index.html
+          grep -q 'workstation-restoration.js' index.html
+          grep -q 'workstation-utilities.js' index.html
+          grep -q 'appbar-tools' index.html
+          grep -q 'Diseño' index.html
+          grep -q 'Ayuda' index.html
+          grep -q 'Ajustes' index.html
+          grep -q 'premium-tool-icon' viewer-ui.js
+          grep -q 'premium-study-status' viewer-ui.js
+          grep -q 'MutationObserver' viewer-ui.js
+          grep -q 'premium-bottom-dock' workstation-restoration.js
+          grep -q 'WL/WW' workstation-restoration.js
+          grep -q 'dv-invert' workstation-restoration.js
+          grep -q 'dv-wlww-reset' workstation-restoration.js
+          grep -q 'premium-focus-layout' workstation-utilities.js
+
+      - name: Validate no clinical image payload was added
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find assets -type f \( -iname '*.dcm' -o -iname '*.dicom' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print | grep -q .; then
+            echo 'Unexpected binary/clinical-looking image asset found under assets/' >&2
+            exit 1
+          fi
+
+      - name: Build unlocked visual preview harness
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('index.html').read_text()
+          hook='''<script>\nsetTimeout(()=>{\n  const root=document.getElementById('dv-root');\n  const lock=document.getElementById('dv-lock-screen');\n  if(root) root.classList.remove('dv-locked');\n  if(lock) lock.classList.add('dv-hidden');\n  if(window.imeDicomUi?.applyPremiumDom) window.imeDicomUi.applyPremiumDom();\n},1200);\n</script>'''
+          p=p.replace('</body>',hook+'\n</body>')
+          Path('workstation-preview.html').write_text(p)
+          PY
+
+      - name: Start static server
+        shell: bash
+        run: |
+          python3 -m http.server 8000 >/tmp/imed_server.log 2>&1 &
+          echo $! >/tmp/imed_server.pid
+          sleep 2
+          curl -fsS http://127.0.0.1:8000/index.html >/tmp/index.html
+          curl -fsS http://127.0.0.1:8000/viewer-premium.css >/tmp/viewer-premium.css
+          curl -fsS http://127.0.0.1:8000/workstation-restoration.css >/tmp/workstation-restoration.css
+          curl -fsS http://127.0.0.1:8000/workstation-restoration.js >/tmp/workstation-restoration.js
+          curl -fsS http://127.0.0.1:8000/workstation-utilities.js >/tmp/workstation-utilities.js
+          curl -fsS http://127.0.0.1:8000/assets/chest-watermark.svg >/tmp/chest-watermark.svg
+          curl -fsS http://127.0.0.1:8000/workstation-preview.html >/tmp/workstation-preview.html
+
+      - name: Find Chromium
+        id: browser
+        shell: bash
+        run: |
+          set -e
+          for b in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then
+              echo "bin=$(command -v "$b")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          exit 1
+
+      - name: Render workstation preview screenshot
+        shell: bash
+        env:
+          BROWSER_BIN: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -euo pipefail
+          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1600,900 --virtual-time-budget=4500 --screenshot=/tmp/workstation.png http://127.0.0.1:8000/workstation-preview.html || true
+          test -s /tmp/workstation.png
+
+      - name: Validate restored DOM in Chromium
+        shell: bash
+        env:
+          BROWSER_BIN: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -euo pipefail
+          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --virtual-time-budget=4500 --dump-dom http://127.0.0.1:8000/workstation-preview.html > /tmp/workstation-dom.html
+          grep -q 'premium-bottom-dock' /tmp/workstation-dom.html
+          grep -q 'premium-empty-overlay' /tmp/workstation-dom.html
+          grep -q 'No hay imagen cargada' /tmp/workstation-dom.html
+          grep -q 'premium-study-status' /tmp/workstation-dom.html
+          grep -q 'data-premium-utility-bound="true"' /tmp/workstation-dom.html
+
+      - name: Upload smoke screenshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: workstation-restoration-smoke
+          path: /tmp/workstation.png
+          if-no-files-found: error

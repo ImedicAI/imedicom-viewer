@@ -2,7 +2,7 @@ name: Tools validation
 
 on:
   push:
-    branches: [redesign/radiology-dark-premium]
+    branches: [redesign/radiology-dark-premium, ui/workstation-premium-restoration]
   workflow_dispatch:
 
 jobs:
@@ -66,9 +66,6 @@ jobs:
 
                 btn('dv-tool-arrow'); drag([.15,.20],[.75,.70]); await wait(30);
                 const arrow=f.annotations.find(a=>a.type==='arrow'); if(!arrow) throw new Error('arrow_create');
-                // El fixture mide solo 8x6: el radio de agarre mínimo (10 px),
-                // correcto para radiografías reales, cubriría toda la imagen. Aislamos
-                // las siguientes herramientas para no convertir ese detalle de CI en fallo.
                 f.annotations=[]; f.undoStack=[]; f.redoStack=[];
 
                 btn('dv-tool-length'); drag([.10,.50],[.60,.50]); await wait(30);
