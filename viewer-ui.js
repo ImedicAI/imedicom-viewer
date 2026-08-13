@@ -47,7 +47,7 @@
       ['pan',['pan','desplazar']],['zoom',['zoom']],['window',['ventana','wl/ww','window']],
       ['invert',['invertir','invert']],['reset',['restablecer','reset']],['rotate',['rotar','rotate']],
       ['flip',['espejo','flip']],['arrow',['flecha','arrow']],['length',['longitud','length','distancia']],
-      ['angle',['angulo','angle']],['cobb',['cobb']],['text',['texto','text']],['bone',['hueso','bone']],
+      ['angle',['angulo','angle']],['cobb',['cobb']],['text',['texto','text']],['bone',['oseo','hueso','bone']],
       ['soft',['tejidos blandos','tejido blando','soft']],['fit',['ajustar','fit']]
     ];
     for(const [key,terms] of candidates){
@@ -56,11 +56,19 @@
     return null;
   }
 
+  function cleanLegacyGlyphs(btn){
+    if(!btn||btn.dataset.premiumLabelCleaned==='true') return;
+    const label=(btn.textContent||'').replace(/^[\s↗↻↶↷⟲⟳↔↕✕📏📐🦴👁👤🖥🏷💡]+/u,'').trim();
+    if(label && btn.children.length===0) btn.textContent=label;
+    btn.dataset.premiumLabelCleaned='true';
+  }
+
   function decorateToolButtons(){
     document.querySelectorAll('#dv-quad-herramientas .dv-btn,#dv-quad-imagen .dv-controls .dv-btn').forEach(btn=>{
       if(btn.dataset.premiumIconBound==='true') return;
       const iconKey=iconForButton(btn);
       if(!iconKey||!ICONS[iconKey]) return;
+      cleanLegacyGlyphs(btn);
       const icon=document.createElement('span');
       icon.className='premium-tool-icon';
       icon.setAttribute('aria-hidden','true');
@@ -69,6 +77,32 @@
       btn.classList.add('premium-icon-button');
       btn.dataset.premiumIconBound='true';
     });
+  }
+
+  function revealTransformGrid(){
+    const tools=document.getElementById('dv-quad-herramientas');
+    const opener=document.getElementById('dv-transform-opener');
+    if(!tools||!opener||document.getElementById('premium-transform-grid')) return;
+    const ids=['dv-flip-h','dv-flip-v','dv-rotate-left','dv-rotate-right'];
+    const buttons=ids.map(id=>document.getElementById(id)).filter(Boolean);
+    if(buttons.length!==4) return;
+    const grid=document.createElement('div');
+    grid.id='premium-transform-grid';
+    grid.className='dv-controls dv-tool-grid premium-transform-grid';
+    const labels={
+      'dv-flip-h':'Voltear H','dv-flip-v':'Voltear V','dv-rotate-left':'Rotar izq.','dv-rotate-right':'Rotar der.'
+    };
+    buttons.forEach(btn=>{
+      btn.textContent=labels[btn.id];
+      btn.dataset.premiumIconBound='false';
+      btn.dataset.premiumLabelCleaned='true';
+      grid.appendChild(btn);
+    });
+    const host=opener.closest('.dv-controls');
+    if(host){
+      host.insertAdjacentElement('afterend',grid);
+      host.classList.add('premium-transform-opener-row');
+    }
   }
 
   function ensureStudyStatus(){
@@ -115,10 +149,11 @@
       if(view) makeSectionLabel('Vista',view.closest('.dv-controls'));
     }
 
+    revealTransformGrid();
     decorateToolButtons();
     ensureStudyStatus();
     initPrivacyWarningToggle();
   }
 
-  window.imeDicomUi={applyPremiumDom,initPrivacyWarningToggle,decorateToolButtons,ensureStudyStatus};
+  window.imeDicomUi={applyPremiumDom,initPrivacyWarningToggle,decorateToolButtons,ensureStudyStatus,revealTransformGrid};
 })();
