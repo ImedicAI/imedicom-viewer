@@ -22,6 +22,9 @@
     const studyDate=formatDate(dicomStr(dataSet,'x00080020'));
     const studyTime=dicomStr(dataSet,'x00080030');
     const modality=dicomStr(dataSet,'x00080060');
+    const presentationIntentType=dicomStr(dataSet,'x00080068').toUpperCase();
+    const manufacturer=dicomStr(dataSet,'x00080070');
+    const manufacturerModelName=dicomStr(dataSet,'x00081090');
     const laterality=dicomStr(dataSet,'x00200062');
     let viewPosition=dicomStr(dataSet,'x00185101').toUpperCase();
     let viewSource='tag (0018,5101)';
@@ -55,6 +58,9 @@
       studyTime:timeFmt || '',
       studyDateTimeDisplay:((studyDate||'')+' '+(timeFmt||'')).trim(),
       modality:modality || '',
+      presentationIntentType,
+      manufacturer,
+      manufacturerModelName,
       laterality:laterality || '',
       viewPosition:viewPosition || '',
       viewSource,
