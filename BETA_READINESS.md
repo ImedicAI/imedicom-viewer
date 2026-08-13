@@ -14,15 +14,7 @@ Runtime now mounts:
 
 ## Automated validation status
 
-The split-shell runtime passed the complete validation suite on commit `2c0d7ba6cdaaca9607b1731ddcdb3f2eb83811ad`:
-
-- Runtime validation — success (`31651094954`).
-- UI controls validation — success (`31651094917`).
-- Tools validation — success (`31651094916`).
-- Export validation — success (`31651094968`).
-- Regression validation — success (`31651094943`).
-- Session/folder/fullscreen validation — success (`31651094973`).
-- Large-matrix stability — success (`31651094984`).
+The split-shell runtime has passed the complete validation suite covering runtime, UI controls, tools, export, regression, session/folder/fullscreen and large-matrix stability.
 
 No clinical DICOM or PHI is stored in the repository or CI artifacts.
 
@@ -30,7 +22,22 @@ No clinical DICOM or PHI is stored in the repository or CI artifacts.
 
 Two real Carestream CR chest PA studies were evaluated locally without being committed to GitHub. They exercised a 2660×2180, MONOCHROME1, 16-bit allocated / 12-bit stored workflow with approximately 5.8 million pixels and Imager Pixel Spacing near 0.160 mm/pixel.
 
-For those studies the current 90° rotation + horizontal flip presentation was consistent with Carestream private presentation-transform metadata. The files were `FOR PROCESSING`; imeDICOM therefore does not claim to reproduce the proprietary Carestream EclipseProcessing look exactly.
+For those studies the 90° rotation + horizontal flip presentation was consistent with Carestream private presentation-transform metadata. Because those files were `FOR PROCESSING`, automatic application of that fallback is now restricted to the validated pattern: chest body part + Carestream manufacturer + `FOR PROCESSING` + portrait pixel matrix.
+
+Two real spine studies were also evaluated locally:
+
+- `DX`, `FOR PRESENTATION`, `BodyPartExamined=TSPINE`, `ViewPosition=AP`, `MONOCHROME2`, `2721×1900`, `PixelSpacing=0.14\0.14 mm`.
+- `DX`, `FOR PRESENTATION`, `BodyPartExamined=TSPINE`, `ViewPosition=LATERAL`, `MONOCHROME2`, `2994×1784`, `PixelSpacing=0.14\0.14 mm`.
+
+Both spine studies rendered coherently and support calibrated measurements.
+
+Three real knee/lower-limb DX studies were then evaluated locally:
+
+- bilateral AP presentation, `MONOCHROME2`, `FOR PRESENTATION`, matrix `2013×1915`;
+- left lateral presentation, `MONOCHROME2`, `FOR PRESENTATION`, matrix `2209×1196`;
+- second left lateral presentation, `MONOCHROME2`, `FOR PRESENTATION`, matrix `2273×1174`.
+
+All three use Explicit VR Little Endian, 16-bit allocated / 12-bit stored pixels and `ImagerPixelSpacing=0.154\0.154 mm`. These studies exposed an unsafe legacy orientation heuristic: portrait non-spine images would previously receive 90° rotation + horizontal flip even when already `FOR PRESENTATION`. The orientation rule was corrected so these knee images remain in their supplied presentation while the previously validated Carestream chest `FOR PROCESSING` case remains supported.
 
 ## Validated functional areas
 
@@ -49,18 +56,19 @@ For those studies the current 90° rotation + horizontal flip presentation was c
 - Access lock/session behavior and fullscreen re-entry flow.
 - Privacy warning expand/collapse regression.
 - Large 2660×2180 12-bit MONOCHROME1 matrix stability in Chromium CI.
+- Real radiography coverage now includes chest PA, spine AP/lateral and knee AP/lateral examples from different acquisition/presentation patterns.
 
 ## Known limitations / deferred external validation
 
 These do not block an internal controlled beta but prevent any claim of broad diagnostic-grade readiness:
 
 1. A real chest lateral DICOM has not yet been supplied for clinical orientation/presentation validation.
-2. Real spine AP and lateral DICOM studies have not yet been supplied for the same clinical validation.
-3. Precise rendering latency has not been measured on the intended workstation hardware; Chromium virtual-time measurements are not valid timing benchmarks.
-4. Real-device Safari/iPad and Edge validation remains pending; current automated browser validation is Chromium-based.
-5. Length currently uses the average of row and column pixel spacing. Strongly anisotropic spacing should be represented separately before claiming generic calibrated measurement accuracy.
-6. Encapsulated JPEG/JPEG-LS/JPEG2000/RLE DICOM pixel data is not supported by the current parser/render path and is intentionally rejected.
-7. Carestream `FOR PROCESSING` private image-processing parameters are not reproduced as a proprietary vendor algorithm. imeDICOM uses its own standard/automatic presentation path.
+2. Precise rendering latency has not been measured on the intended workstation hardware; Chromium virtual-time measurements are not valid timing benchmarks.
+3. Real-device Safari/iPad and Edge validation remains pending; current automated browser validation is Chromium-based.
+4. Length currently uses the average of row and column pixel spacing. Strongly anisotropic spacing should be represented separately before claiming generic calibrated measurement accuracy.
+5. Encapsulated JPEG/JPEG-LS/JPEG2000/RLE DICOM pixel data is not supported by the current parser/render path and is intentionally rejected.
+6. Carestream `FOR PROCESSING` private image-processing parameters are not reproduced as a proprietary vendor algorithm. imeDICOM uses its own standard/automatic presentation path.
+7. Some clinical DX studies may contain laterality markers or identifiers burned directly into pixel data. The metadata privacy toggle cannot remove information that is already part of the pixels.
 8. Diagnostic-display calibration, DICOM GSDF conformance, formal QA, cybersecurity/regulatory documentation and clinical validation are outside the current internal-beta validation scope.
 
 ## Release boundary
