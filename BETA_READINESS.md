@@ -2,7 +2,7 @@
 
 ## Current runtime architecture
 
-The production branch candidate no longer fetches the monolithic `viewer-source.html` at runtime.
+The production branch no longer fetches the monolithic `viewer-source.html` at runtime.
 
 Runtime now mounts:
 
@@ -12,9 +12,13 @@ Runtime now mounts:
 
 `viewer-source.html` is retained only as an archival/build source for `split-legacy-source.yml`; it is not a runtime dependency. `legacy-viewer.html` remains a manual recovery fallback.
 
+The premium workstation restoration has been merged to `main` and published through GitHub Pages. The production UI now includes the denser workstation layout, restored premium tool presentation, top utility controls, bottom quick-access dock, live study status, and a synthetic thorax watermark for the empty viewer state. The watermark is synthetic and contains no clinical image data or PHI.
+
 ## Automated validation status
 
 The split-shell runtime has passed the complete validation suite covering runtime, UI controls, tools, export, regression, session/folder/fullscreen and large-matrix stability.
+
+The workstation restoration was also validated in Chromium before merge, including DOM checks, synthetic empty-state rendering, tool controls, DICOM render transformations, measurements, export, access/session/fullscreen behavior and a 2660×2180 MONOCHROME1 large-matrix test.
 
 No clinical DICOM or PHI is stored in the repository or CI artifacts.
 
@@ -39,6 +43,8 @@ Three real knee/lower-limb DX studies were then evaluated locally:
 
 All three use Explicit VR Little Endian, 16-bit allocated / 12-bit stored pixels and `ImagerPixelSpacing=0.154\0.154 mm`. These studies exposed an unsafe legacy orientation heuristic: portrait non-spine images would previously receive 90° rotation + horizontal flip even when already `FOR PRESENTATION`. The orientation rule was corrected so these knee images remain in their supplied presentation while the previously validated Carestream chest `FOR PROCESSING` case remains supported.
 
+Two real pelvis DX studies were also evaluated locally. Both were Explicit VR Little Endian, `FOR PRESENTATION`, `MONOCHROME2`, 16-bit allocated / 12-bit stored, with `ImagerPixelSpacing=0.154\0.154 mm`. One supplied `ViewPosition=AP`; the other had incomplete projection metadata. Both rendered with coherent pelvis orientation and required no Carestream chest fallback. The files themselves and all patient identifiers remained local and were not uploaded to the repository.
+
 ## Validated functional areas
 
 - Explicit VR Little Endian uncompressed DICOM parsing.
@@ -56,7 +62,8 @@ All three use Explicit VR Little Endian, 16-bit allocated / 12-bit stored pixels
 - Access lock/session behavior and fullscreen re-entry flow.
 - Privacy warning expand/collapse regression.
 - Large 2660×2180 12-bit MONOCHROME1 matrix stability in Chromium CI.
-- Real radiography coverage now includes chest PA, spine AP/lateral and knee AP/lateral examples from different acquisition/presentation patterns.
+- Real radiography coverage now includes chest PA, spine AP/lateral, knee AP/lateral and pelvis examples from different acquisition/presentation patterns.
+- Premium workstation UI is deployed publicly from `main` and retains the validated DICOM/render pipeline.
 
 ## Known limitations / deferred external validation
 
@@ -73,4 +80,4 @@ These do not block an internal controlled beta but prevent any claim of broad di
 
 ## Release boundary
 
-This branch is suitable for final internal beta review under controlled radiography workflows that match the validated uncompressed DICOM path. It must not be described as a certified diagnostic workstation or merged/deployed solely on the basis of this document.
+The current `main` build is suitable for controlled internal beta use under radiography workflows that match the validated uncompressed DICOM path. It must not be described as a certified diagnostic workstation. Further progress toward diagnostic-grade readiness depends primarily on real-device testing, broader vendor/anatomy coverage, calibrated-display QA, cybersecurity/regulatory work and formal clinical validation.
