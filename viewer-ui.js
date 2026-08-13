@@ -30,9 +30,6 @@
     length:'<svg viewBox="0 0 24 24"><path d="m5 17 12-12M4 13l7 7M13 4l7 7"/></svg>',
     angle:'<svg viewBox="0 0 24 24"><path d="M5 18 12 6l7 12M8.5 18h7"/></svg>',
     cobb:'<svg viewBox="0 0 24 24"><path d="M4 7h8M12 7l4 10M12 17h8"/></svg>',
-    text:'<svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v13M8.5 19h7"/></svg>',
-    bone:'<svg viewBox="0 0 24 24"><path d="M8.2 9.2 14.8 15.8M6.7 10.5a2.7 2.7 0 1 1 1.5-4.8 2.8 2.8 0 0 1 4 0l6.1 6.1a2.8 2.8 0 0 1 0 4 2.7 2.7 0 1 1-4.8 1.5"/></svg>',
-    soft:'<svg viewBox="0 0 24 24"><path d="M5 16c3-7 11-9 14-8-1 7-6 11-14 8ZM8 14c2-2 4.5-3.4 7.5-4.1"/></svg>',
     fit:'<svg viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>'
   };
 
@@ -42,13 +39,13 @@
 
   function iconForButton(btn){
     const id=(btn.id||'').toLowerCase();
+    if(['dv-tool-text','dv-text-bold-btn','dv-profile-bone','dv-profile-soft','dv-view-opener'].includes(id)) return null;
     const label=normalizeLabel(btn.textContent);
     const candidates=[
       ['pan',['pan','desplazar']],['zoom',['zoom']],['window',['ventana','wl/ww','window']],
       ['invert',['invertir','invert']],['reset',['restablecer','reset']],['rotate',['rotar','rotate']],
       ['flip',['espejo','flip']],['arrow',['flecha','arrow']],['length',['longitud','length','distancia']],
-      ['angle',['angulo','angle']],['cobb',['cobb']],['text',['texto','text']],['bone',['oseo','hueso','bone']],
-      ['soft',['tejidos blandos','tejido blando','soft']],['fit',['ajustar','fit']]
+      ['angle',['angulo','angle']],['cobb',['cobb']],['fit',['ajustar','fit']]
     ];
     for(const [key,terms] of candidates){
       if(terms.some(term=>id.includes(term.replace(/\s+/g,'-'))||label.includes(term))) return key;
@@ -105,6 +102,79 @@
     }
   }
 
+  function configureTextControls(){
+    const text=document.getElementById('dv-tool-text');
+    const bold=document.getElementById('dv-text-bold-btn');
+    const color=document.getElementById('dv-color-btn');
+    if(text){
+      text.querySelectorAll('.premium-tool-icon').forEach(n=>n.remove());
+      text.classList.remove('premium-icon-button');
+      text.textContent='T';
+      text.dataset.premiumIconBound='text-only';
+    }
+    if(bold){
+      bold.querySelectorAll('.premium-tool-icon').forEach(n=>n.remove());
+      bold.classList.remove('premium-icon-button');
+      bold.textContent='N';
+      bold.dataset.premiumIconBound='text-only';
+    }
+    const host=text?.closest('.dv-controls');
+    if(host && bold && color) host.classList.add('premium-text-controls-row');
+  }
+
+  function configureEditHistoryRow(){
+    const clear=document.getElementById('dv-clear-annotations');
+    const undo=document.getElementById('dv-undo');
+    const redo=document.getElementById('dv-redo');
+    const host=clear?.closest('.dv-controls');
+    if(!host||!undo||!redo) return;
+    host.classList.add('premium-edit-history-row');
+    undo.textContent='↶';
+    redo.textContent='↷';
+    undo.setAttribute('aria-label','Deshacer');
+    redo.setAttribute('aria-label','Rehacer');
+  }
+
+  function configureViewAndPresets(){
+    const view=document.getElementById('dv-view-opener');
+    const bone=document.getElementById('dv-profile-bone');
+    const soft=document.getElementById('dv-profile-soft');
+    if(!view||!bone||!soft) return null;
+
+    view.querySelectorAll('.premium-tool-icon').forEach(n=>n.remove());
+    view.classList.remove('premium-icon-button');
+    view.classList.add('premium-view-button');
+    view.innerHTML='<span class="premium-view-eye" aria-hidden="true"><svg viewBox="0 0 64 40"><path d="M3 20C12 7 22 3 32 3s20 4 29 17c-9 13-19 17-29 17S12 33 3 20Z"/><circle cx="32" cy="20" r="8"/><circle cx="32" cy="20" r="3" class="premium-view-pupil"/></svg></span><span class="premium-view-arrow" aria-hidden="true"></span>';
+    view.setAttribute('aria-label','Ver opciones');
+    view.dataset.premiumIconBound='view-only';
+
+    [bone,soft].forEach(btn=>{
+      btn.querySelectorAll('.premium-tool-icon').forEach(n=>n.remove());
+      btn.classList.remove('premium-icon-button');
+      btn.textContent=btn.id==='dv-profile-bone'?'Óseo':'Soft';
+      btn.dataset.premiumIconBound='text-only';
+    });
+
+    const viewWrap=view.closest('.dv-flyout-wrap');
+    const viewHost=view.closest('.dv-controls');
+    const presetHost=bone.closest('.dv-controls');
+    if(!viewWrap||!viewHost||!presetHost) return null;
+
+    let row=document.getElementById('premium-view-preset-row');
+    if(!row){
+      row=document.createElement('div');
+      row.id='premium-view-preset-row';
+      row.className='dv-controls dv-tool-grid premium-view-preset-row';
+      viewHost.parentNode.insertBefore(row,viewHost);
+    }
+    row.appendChild(viewWrap);
+    row.appendChild(bone);
+    row.appendChild(soft);
+    if(viewHost!==row && viewHost.children.length===0) viewHost.remove();
+    if(presetHost!==row && presetHost.children.length===0) presetHost.remove();
+    return row;
+  }
+
   function ensureStudyStatus(){
     const left=document.querySelector('.dv-left-col');
     const list=document.getElementById('dv-filelist');
@@ -136,6 +206,12 @@
       empty.innerHTML='<div class="premium-ring">⇧</div><div class="premium-title">Cargue un estudio DICOM</div><div class="premium-copy">Arrastra y suelta archivos DICOM aquí<br>o usa el botón de carga en el panel izquierdo.</div>';
     }
 
+    revealTransformGrid();
+    decorateToolButtons();
+    configureEditHistoryRow();
+    configureTextControls();
+    const viewPresetRow=configureViewAndPresets();
+
     const tools=document.getElementById('dv-quad-herramientas');
     if(tools){
       makeSectionLabel('Marcadores',tools.querySelector('.dv-controls'));
@@ -143,14 +219,9 @@
       if(transform) makeSectionLabel('Transformar',transform.closest('.dv-controls'));
       const arrow=document.getElementById('dv-tool-arrow');
       if(arrow) makeSectionLabel('Medición y anotación',arrow.closest('.dv-controls'));
-      const bone=document.getElementById('dv-profile-bone');
-      if(bone) makeSectionLabel('Preset',bone.closest('.dv-controls'));
-      const view=document.getElementById('dv-view-opener');
-      if(view) makeSectionLabel('Vista',view.closest('.dv-controls'));
+      if(viewPresetRow) makeSectionLabel('Vista / Preset',viewPresetRow);
     }
 
-    revealTransformGrid();
-    decorateToolButtons();
     ensureStudyStatus();
     initPrivacyWarningToggle();
   }
