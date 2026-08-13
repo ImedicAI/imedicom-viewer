@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - redesign/radiology-dark-premium
+      - ui/workstation-premium-restoration
   workflow_dispatch:
 
 jobs:
