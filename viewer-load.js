@@ -100,9 +100,12 @@
             entry.pixel.origWindowCenter=entry.pixel.windowCenter;
             entry.pixel.origWindowWidth=entry.pixel.windowWidth;
 
-            // Mantiene exactamente la regla existente de orientacion automatica.
-            // Se deja aqui sin reinterpretarla durante la modularizacion.
-            if(entry.pixel.rows>entry.pixel.cols&&!entry.meta.isSpineBodyPart){
+            // Automatic orientation is intentionally restricted to the exact
+            // Carestream chest FOR PROCESSING pattern validated with real studies.
+            // Other body parts and FOR PRESENTATION images are left untouched.
+            const carestream=/CARESTREAM/i.test(entry.meta.manufacturer||'');
+            const forProcessing=entry.meta.presentationIntentType==='FOR PROCESSING';
+            if(entry.pixel.rows>entry.pixel.cols && entry.meta.isChestBodyPart && carestream && forProcessing){
               entry.rotation=90;
               entry.flipH=true;
             }
