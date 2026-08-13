@@ -1,0 +1,73 @@
+name: Pages live smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * *'
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find Chromium
+        id: browser
+        shell: bash
+        run: |
+          set -e
+          for b in google-chrome google-chrome-stable chromium chromium-browser; do
+            if command -v "$b" >/dev/null 2>&1; then
+              echo "bin=$(command -v "$b")" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          exit 1
+
+      - name: Wait for live production assets
+        shell: bash
+        run: |
+          set -e
+          BASE='https://imedicai.github.io/imedicom-viewer'
+          for i in $(seq 1 18); do
+            html=$(curl -fsSL --max-time 20 "$BASE/?smoke=${GITHUB_RUN_ID}-${i}" || true)
+            if printf '%s' "$html" | grep -q 'workstation-restoration.js' \
+               && printf '%s' "$html" | grep -q 'workstation-utilities.js' \
+               && curl -fsSL --max-time 20 "$BASE/assets/chest-watermark.svg?smoke=${GITHUB_RUN_ID}-${i}" >/dev/null \
+               && curl -fsSL --max-time 20 "$BASE/viewer-loader.js?smoke=${GITHUB_RUN_ID}-${i}" >/dev/null; then
+              printf '%s' "$html" > live-index.html
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'Live GitHub Pages assets did not become ready in time' >&2
+          exit 1
+
+      - name: Exercise live production DOM
+        shell: bash
+        env:
+          CHROME: ${{ steps.browser.outputs.bin }}
+        run: |
+          set -e
+          "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
+            --virtual-time-budget=18000 --window-size=1600,1000 \
+            --dump-dom --screenshot=pages-live.png \
+            "https://imedicai.github.io/imedicom-viewer/?smoke=${GITHUB_RUN_ID}" \
+            > pages-live-dom.html 2> pages-live-chrome.log || true
+          grep -q 'id="dv-root"' pages-live-dom.html
+          grep -q 'id="dv-canvas"' pages-live-dom.html
+          grep -q 'data-viewer-integration=' pages-live-dom.html
+          grep -q 'workstation-restoration.js' live-index.html
+          grep -q 'workstation-utilities.js' live-index.html
+          if grep -q 'No se pudo inicializar el visor' pages-live-dom.html; then
+            exit 1
+          fi
+
+      - name: Upload live smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pages-live-smoke
+          path: |
+            live-index.html
+            pages-live-dom.html
+            pages-live.png
+            pages-live-chrome.log
