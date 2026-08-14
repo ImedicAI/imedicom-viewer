@@ -8,7 +8,19 @@
       reset.title='Restablecer nivel y ancho de ventana';
       reset.setAttribute('aria-label','RESET');
     }
-    ['dv-toggle-measurements','dv-show-tags'].forEach(id=>document.getElementById(id)?.remove());
+    // Se conservan estos nodos como hooks de compatibilidad del runtime
+    // legacy, pero se mantienen fuera de la interfaz refinada. Ocultarlos
+    // en vez de eliminarlos evita una carrera durante el montaje asincrono:
+    // el script legacy puede enlazar sus listeners aunque este refinamiento
+    // se ejecute antes de que termine executeScripts().
+    ['dv-toggle-measurements','dv-show-tags'].forEach(id=>{
+      const el=document.getElementById(id);
+      if(!el)return;
+      el.hidden=true;
+      el.style.display='none';
+      el.setAttribute('aria-hidden','true');
+      el.tabIndex=-1;
+    });
   }
   function schedule(){if(pending)return;pending=true;requestAnimationFrame(enforce);}
   function bind(){
