@@ -40,11 +40,17 @@ jobs:
         run: |
           set -e
           BASE='https://imedicai.github.io/imedicom-viewer'
-          for i in $(seq 1 18); do
+          for i in $(seq 1 24); do
             html=$(curl -fsSL --max-time 20 "$BASE/?smoke=${GITHUB_RUN_ID}-${i}" || true)
             if printf '%s' "$html" | grep -q 'workstation-restoration.js' \
-               && printf '%s' "$html" | grep -q 'workstation-utilities.js' \
+               && printf '%s' "$html" | grep -q 'workstation-refinements-v2.css' \
+               && printf '%s' "$html" | grep -q 'workstation-refinements-v2.js' \
+               && printf '%s' "$html" | grep -q 'workstation-refinements-v2-fix.js' \
+               && printf '%s' "$html" | grep -q 'workstation-refinements-v2-finalize.js' \
                && curl -fsSL --max-time 20 "$BASE/viewer-watermark.webp?smoke=${GITHUB_RUN_ID}-${i}" >/dev/null \
+               && curl -fsSL --max-time 20 "$BASE/workstation-refinements-v2.js?smoke=${GITHUB_RUN_ID}-${i}" >/dev/null \
+               && curl -fsSL --max-time 20 "$BASE/workstation-refinements-v2-fix.js?smoke=${GITHUB_RUN_ID}-${i}" >/dev/null \
+               && curl -fsSL --max-time 20 "$BASE/workstation-refinements-v2-finalize.js?smoke=${GITHUB_RUN_ID}-${i}" >/dev/null \
                && curl -fsSL --max-time 20 "$BASE/viewer-loader.js?smoke=${GITHUB_RUN_ID}-${i}" >/dev/null; then
               printf '%s' "$html" > live-index.html
               exit 0
@@ -61,7 +67,7 @@ jobs:
         run: |
           set -e
           "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
-            --virtual-time-budget=18000 --window-size=1600,1000 \
+            --virtual-time-budget=24000 --window-size=1600,1000 \
             --dump-dom --screenshot=pages-live.png \
             "https://imedicai.github.io/imedicom-viewer/?smoke=${GITHUB_RUN_ID}" \
             > pages-live-dom.html 2> pages-live-chrome.log || true
@@ -70,11 +76,17 @@ jobs:
           grep -q 'data-viewer-integration=' pages-live-dom.html
           grep -q 'id="premium-layout-opener"' pages-live-dom.html
           grep -q 'premium-marker-row' pages-live-dom.html
-          grep -q 'Giro Horizontal' pages-live-dom.html
-          grep -q 'Giro Vertical' pages-live-dom.html
-          grep -q 'viewer-watermark.webp' pages-live-dom.html
-          grep -q 'workstation-restoration.js' live-index.html
-          grep -q 'workstation-utilities.js' live-index.html
+          grep -q 'id="dv-tool-crop"' pages-live-dom.html
+          grep -q 'id="v2-res-wrap"' pages-live-dom.html
+          grep -q 'v2-full-watermark' pages-live-dom.html
+          grep -q '>RESET<' pages-live-dom.html
+          ! grep -q 'id="dv-toggle-measurements"' pages-live-dom.html
+          ! grep -q 'id="dv-show-tags"' pages-live-dom.html
+          ! grep -q 'id="premium-transform-grid"[^>]*>.*premium-refine-label' pages-live-dom.html || true
+          grep -q 'workstation-refinements-v2.css' live-index.html
+          grep -q 'workstation-refinements-v2.js' live-index.html
+          grep -q 'workstation-refinements-v2-fix.js' live-index.html
+          grep -q 'workstation-refinements-v2-finalize.js' live-index.html
           if grep -q 'No se pudo inicializar el visor' pages-live-dom.html; then
             exit 1
           fi
