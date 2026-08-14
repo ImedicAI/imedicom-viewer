@@ -23,9 +23,13 @@ jobs:
           test -f workstation-utilities.js
           test -f workstation-refinements-v2.css
           test -f workstation-refinements-v2.js
+          test -f workstation-refinements-v2-fix.js
+          test -f workstation-refinements-v2-finalize.js
           test -f viewer-watermark.webp
           grep -q 'workstation-refinements-v2.css' index.html
           grep -q 'workstation-refinements-v2.js' index.html
+          grep -q 'workstation-refinements-v2-fix.js' index.html
+          grep -q 'workstation-refinements-v2-finalize.js' index.html
           grep -q 'viewer-loader.js' index.html
           ! grep -q 'viewer-source.html' viewer-loader.js
           node --check viewer-ui.js
@@ -33,6 +37,8 @@ jobs:
           node --check workstation-restoration.js
           node --check workstation-utilities.js
           node --check workstation-refinements-v2.js
+          node --check workstation-refinements-v2-fix.js
+          node --check workstation-refinements-v2-finalize.js
 
       - name: Find Chromium
         id: browser
@@ -59,7 +65,7 @@ jobs:
             result.style.display='none';
             document.body.appendChild(result);
             const finish=(s,d)=>{result.dataset.status=s;result.textContent=JSON.stringify(d||{});document.documentElement.dataset.mainSmoke=s;};
-            const until=async(fn,label)=>{for(let i=0;i<180;i++){const v=fn();if(v)return v;await wait(100);}throw new Error('timeout_'+label);};
+            const until=async(fn,label)=>{for(let i=0;i<200;i++){const v=fn();if(v)return v;await wait(100);}throw new Error('timeout_'+label);};
             try{
               await until(()=>document.documentElement.dataset.viewerIntegration,'viewer');
               const root=document.getElementById('dv-root');
@@ -68,6 +74,9 @@ jobs:
               root.classList.remove('dv-locked');
               if(lock) lock.classList.add('dv-hidden');
               await until(()=>document.getElementById('dv-tool-crop')&&document.getElementById('premium-layout-opener'),'v2_controls');
+              await until(()=>!document.querySelector('#premium-transform-grid .premium-refine-label'),'transform_stabilized');
+              await until(()=>document.getElementById('dv-wlww-reset')?.textContent.trim()==='RESET','reset_stabilized');
+              await until(()=>!document.getElementById('dv-toggle-measurements')&&!document.getElementById('dv-show-tags'),'view_menu_stabilized');
 
               for(const id of ['dv-viewer-wrap','dv-quad-herramientas','premium-study-status','premium-layout-opener','v2-res-wrap','v2-measure-top','v2-measure-second','v2-measure-bottom']){
                 if(!document.getElementById(id)) throw new Error('missing_'+id);
@@ -144,7 +153,7 @@ jobs:
           CHROME: ${{ steps.browser.outputs.bin }}
         run: |
           "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
-            --virtual-time-budget=24000 --window-size=1600,1000 \
+            --virtual-time-budget=26000 --window-size=1600,1000 \
             --dump-dom --screenshot=main-workstation.png \
             http://127.0.0.1:8080/main-smoke.html > dom-main-smoke.html 2> chrome-main-smoke.log || true
           grep -q 'data-main-smoke="pass"' dom-main-smoke.html
