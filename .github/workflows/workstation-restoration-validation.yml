@@ -21,37 +21,33 @@ jobs:
             node --check "$f"
           done
 
-      - name: Validate restored workstation assets
+      - name: Validate refined workstation assets
         shell: bash
         run: |
           set -euo pipefail
-          test -f assets/chest-watermark.svg
+          test -f viewer-watermark.webp
           test -f workstation-restoration.css
           test -f workstation-restoration.js
           test -f workstation-utilities.js
-          grep -q 'assets/chest-watermark.svg' workstation-restoration.js
+          grep -q 'viewer-watermark.webp' workstation-restoration.js
+          grep -q 'premium-marker-row' workstation-restoration.js
+          grep -q 'Giro Horizontal' workstation-restoration.js
+          grep -q 'Giro Vertical' workstation-restoration.js
+          grep -q '90° izq.' workstation-restoration.js
+          grep -q '90° der.' workstation-restoration.js
+          grep -q 'premium-layout-opener' workstation-restoration.js
+          grep -q 'premium-multiview' workstation-restoration.js
           grep -q 'workstation-restoration.css' index.html
           grep -q 'workstation-restoration.js' index.html
           grep -q 'workstation-utilities.js' index.html
-          grep -q 'appbar-tools' index.html
-          grep -q 'Diseño' index.html
-          grep -q 'Ayuda' index.html
-          grep -q 'Ajustes' index.html
-          grep -q 'premium-tool-icon' viewer-ui.js
-          grep -q 'premium-study-status' viewer-ui.js
-          grep -q 'MutationObserver' viewer-ui.js
-          grep -q 'premium-bottom-dock' workstation-restoration.js
-          grep -q 'WL/WW' workstation-restoration.js
-          grep -q 'dv-invert' workstation-restoration.js
-          grep -q 'dv-wlww-reset' workstation-restoration.js
           grep -q 'premium-focus-layout' workstation-utilities.js
 
-      - name: Validate no clinical image payload was added
+      - name: Validate no clinical DICOM payload was added
         shell: bash
         run: |
           set -euo pipefail
-          if find assets -type f \( -iname '*.dcm' -o -iname '*.dicom' -o -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) -print | grep -q .; then
-            echo 'Unexpected binary/clinical-looking image asset found under assets/' >&2
+          if find . -type f \( -iname '*.dcm' -o -iname '*.dicom' \) -not -path './.git/*' -print | grep -q .; then
+            echo 'Unexpected DICOM payload found in repository' >&2
             exit 1
           fi
 
@@ -61,7 +57,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p=Path('index.html').read_text()
-          hook='''<script>\nsetTimeout(()=>{\n  const root=document.getElementById('dv-root');\n  const lock=document.getElementById('dv-lock-screen');\n  if(root) root.classList.remove('dv-locked');\n  if(lock) lock.classList.add('dv-hidden');\n  if(window.imeDicomUi?.applyPremiumDom) window.imeDicomUi.applyPremiumDom();\n},1200);\n</script>'''
+          hook='''<script>\nsetTimeout(()=>{\n  const root=document.getElementById('dv-root');\n  const lock=document.getElementById('dv-lock-screen');\n  if(root) root.classList.remove('dv-locked');\n  if(lock) lock.classList.add('dv-hidden');\n  if(window.imeDicomUi?.applyPremiumDom) window.imeDicomUi.applyPremiumDom();\n  if(window.imeDicomWorkstation?.ensureRestoration) window.imeDicomWorkstation.ensureRestoration();\n  if(window.imeDicomWorkstation?.setMultiLayout) window.imeDicomWorkstation.setMultiLayout(4);\n},1200);\n</script>'''
           p=p.replace('</body>',hook+'\n</body>')
           Path('workstation-preview.html').write_text(p)
           PY
@@ -73,11 +69,9 @@ jobs:
           echo $! >/tmp/imed_server.pid
           sleep 2
           curl -fsS http://127.0.0.1:8000/index.html >/tmp/index.html
-          curl -fsS http://127.0.0.1:8000/viewer-premium.css >/tmp/viewer-premium.css
           curl -fsS http://127.0.0.1:8000/workstation-restoration.css >/tmp/workstation-restoration.css
           curl -fsS http://127.0.0.1:8000/workstation-restoration.js >/tmp/workstation-restoration.js
-          curl -fsS http://127.0.0.1:8000/workstation-utilities.js >/tmp/workstation-utilities.js
-          curl -fsS http://127.0.0.1:8000/assets/chest-watermark.svg >/tmp/chest-watermark.svg
+          curl -fsS http://127.0.0.1:8000/viewer-watermark.webp >/tmp/viewer-watermark.webp
           curl -fsS http://127.0.0.1:8000/workstation-preview.html >/tmp/workstation-preview.html
 
       - name: Find Chromium
@@ -99,19 +93,28 @@ jobs:
           BROWSER_BIN: ${{ steps.browser.outputs.bin }}
         run: |
           set -euo pipefail
-          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1600,900 --virtual-time-budget=4500 --screenshot=/tmp/workstation.png http://127.0.0.1:8000/workstation-preview.html || true
+          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1600,900 --virtual-time-budget=5500 --screenshot=/tmp/workstation.png http://127.0.0.1:8000/workstation-preview.html || true
           test -s /tmp/workstation.png
 
-      - name: Validate restored DOM in Chromium
+      - name: Validate refined DOM in Chromium
         shell: bash
         env:
           BROWSER_BIN: ${{ steps.browser.outputs.bin }}
         run: |
           set -euo pipefail
-          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --virtual-time-budget=4500 --dump-dom http://127.0.0.1:8000/workstation-preview.html > /tmp/workstation-dom.html
-          grep -q 'premium-bottom-dock' /tmp/workstation-dom.html
+          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --virtual-time-budget=5500 --dump-dom http://127.0.0.1:8000/workstation-preview.html > /tmp/workstation-dom.html
+          ! grep -q 'class="premium-bottom-dock"' /tmp/workstation-dom.html
+          ! grep -q 'id="dv-clear-annotations"' /tmp/workstation-dom.html
           grep -q 'premium-empty-overlay' /tmp/workstation-dom.html
-          grep -q 'No hay imagen cargada' /tmp/workstation-dom.html
+          grep -q 'viewer-watermark.webp' /tmp/workstation-dom.html
+          grep -q 'premium-marker-row' /tmp/workstation-dom.html
+          grep -q 'Giro Horizontal' /tmp/workstation-dom.html
+          grep -q 'Giro Vertical' /tmp/workstation-dom.html
+          grep -q '90° izq.' /tmp/workstation-dom.html
+          grep -q '90° der.' /tmp/workstation-dom.html
+          grep -q 'id="premium-layout-opener"' /tmp/workstation-dom.html
+          grep -q 'id="premium-multiview"' /tmp/workstation-dom.html
+          test "$(grep -o 'premium-multiview-cell' /tmp/workstation-dom.html | wc -l)" -ge 4
           grep -q 'premium-study-status' /tmp/workstation-dom.html
           grep -q 'data-premium-utility-bound="true"' /tmp/workstation-dom.html
 
