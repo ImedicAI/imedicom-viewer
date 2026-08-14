@@ -21,17 +21,18 @@ jobs:
           test -f workstation-restoration.css
           test -f workstation-restoration.js
           test -f workstation-utilities.js
+          test -f workstation-refinements-v2.css
+          test -f workstation-refinements-v2.js
           test -f viewer-watermark.webp
-          grep -q 'workstation-restoration.css' index.html
-          grep -q 'workstation-restoration.js' index.html
-          grep -q 'workstation-utilities.js' index.html
+          grep -q 'workstation-refinements-v2.css' index.html
+          grep -q 'workstation-refinements-v2.js' index.html
           grep -q 'viewer-loader.js' index.html
           ! grep -q 'viewer-source.html' viewer-loader.js
-          grep -q 'viewer-watermark.webp' workstation-restoration.js
           node --check viewer-ui.js
           node --check viewer-loader.js
           node --check workstation-restoration.js
           node --check workstation-utilities.js
+          node --check workstation-refinements-v2.js
 
       - name: Find Chromium
         id: browser
@@ -58,46 +59,71 @@ jobs:
             result.style.display='none';
             document.body.appendChild(result);
             const finish=(s,d)=>{result.dataset.status=s;result.textContent=JSON.stringify(d||{});document.documentElement.dataset.mainSmoke=s;};
+            const until=async(fn,label)=>{for(let i=0;i<160;i++){const v=fn();if(v)return v;await wait(100);}throw new Error('timeout_'+label);};
             try{
-              for(let i=0;i<120;i++){
-                if(document.documentElement.dataset.viewerIntegration) break;
-                await wait(100);
-              }
-              if(!document.documentElement.dataset.viewerIntegration) throw new Error('viewer_not_ready');
+              await until(()=>document.documentElement.dataset.viewerIntegration,'viewer');
               const root=document.getElementById('dv-root');
               const lock=document.getElementById('dv-lock-screen');
               if(!root) throw new Error('root_missing');
               root.classList.remove('dv-locked');
               if(lock) lock.classList.add('dv-hidden');
-              if(window.imeDicomWorkstation?.ensureRestoration) window.imeDicomWorkstation.ensureRestoration();
-              await wait(300);
-              for(const id of ['dv-viewer-wrap','dv-quad-herramientas','premium-study-status','premium-layout-opener']){
+              await until(()=>document.getElementById('dv-tool-crop'),'v2_controls');
+
+              for(const id of ['dv-viewer-wrap','dv-quad-herramientas','premium-study-status','premium-layout-opener','v2-res-wrap','v2-measure-top','v2-measure-second','v2-measure-bottom']){
                 if(!document.getElementById(id)) throw new Error('missing_'+id);
               }
               if(document.querySelector('.premium-bottom-dock')) throw new Error('old_bottom_dock_present');
               if(document.getElementById('dv-clear-annotations')) throw new Error('old_clear_button_present');
-              if(!document.querySelector('.premium-empty-overlay')) throw new Error('empty_overlay_missing');
               const markers=[...document.querySelectorAll('#dv-quad-herramientas .premium-marker-row .dv-marker-btn')];
               if(markers.length!==4) throw new Error('marker_count_'+markers.length);
-              const transformText=[...document.querySelectorAll('#premium-transform-grid .premium-refine-label')].map(n=>n.textContent.trim());
-              for(const expected of ['Giro Horizontal','Giro Vertical','90° izq.','90° der.']){
-                if(!transformText.includes(expected)) throw new Error('transform_missing_'+expected);
-              }
+              if(document.querySelector('#premium-transform-grid .premium-refine-label')) throw new Error('transform_text_still_present');
+              if(document.querySelectorAll('#v2-measure-top .v2-measure-button').length!==3) throw new Error('measure_top_count');
+              if(document.querySelectorAll('#v2-measure-second .v2-measure-button').length!==2) throw new Error('measure_second_count');
+              if(document.querySelectorAll('#v2-measure-bottom .v2-measure-button').length!==2) throw new Error('measure_bottom_count');
+              if(document.getElementById('dv-wlww-reset')?.textContent.trim()!=='RESET') throw new Error('reset_word');
+
               const view=document.getElementById('dv-view-opener');
-              view.click();
-              await wait(50);
+              view.click(); await wait(80);
               const viewMenu=document.getElementById('dv-view-dropdown');
               if(!viewMenu||!viewMenu.classList.contains('open')) throw new Error('view_menu_not_open');
-              if(viewMenu.querySelectorAll('.dv-btn').length<4) throw new Error('view_menu_options');
+              if(viewMenu.querySelectorAll('.dv-btn').length!==2) throw new Error('view_menu_options_'+viewMenu.querySelectorAll('.dv-btn').length);
+              if(document.getElementById('dv-toggle-measurements')||document.getElementById('dv-show-tags')) throw new Error('crossed_view_options_present');
               view.click();
-              window.imeDicomWorkstation.setMultiLayout(4);
+
+              const resArrow=document.getElementById('v2-res-arrow');
+              resArrow.click(); await wait(20);
+              const resMenu=document.getElementById('v2-res-menu');
+              if(!resMenu.classList.contains('open')) throw new Error('res_menu_not_open');
+              resMenu.querySelector('[data-res="4"]').click();
+              if(document.getElementById('dv-res').value!=='4') throw new Error('resolution_not_4k');
+
+              const watermark=document.querySelector('.premium-empty-watermark');
+              if(!watermark?.classList.contains('v2-full-watermark')) throw new Error('watermark_not_full');
+              const layoutMenu=document.getElementById('premium-layout-dropdown');
+              if(layoutMenu.querySelectorAll('button[data-layout]').length!==4) throw new Error('layout_options');
+
+              window.imeDicomWorkstation.setMultiLayout(4); await wait(80);
+              if(document.querySelectorAll('#premium-multiview .premium-multiview-cell').length!==4) throw new Error('multiview_cells');
+              window.imeDicomWorkstation.setMultiLayout(1); await wait(50);
+
+              const canvas=document.getElementById('dv-canvas');
+              canvas.width=240; canvas.height=180; canvas.style.display='block'; canvas.style.width='240px'; canvas.style.height='180px';
+              const ctx=canvas.getContext('2d');ctx.fillStyle='#777';ctx.fillRect(0,0,240,180);ctx.fillStyle='#ddd';ctx.fillRect(40,30,140,100);
+              const wrap=document.getElementById('dv-viewer-wrap');
+              document.getElementById('dv-tool-crop').click(); await wait(20);
+              const cr=canvas.getBoundingClientRect();
+              const sx=cr.left+30,sy=cr.top+25,ex=cr.left+170,ey=cr.top+125;
+              wrap.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0,clientX:sx,clientY:sy}));
+              wrap.dispatchEvent(new MouseEvent('mousemove',{bubbles:true,cancelable:true,button:0,clientX:ex,clientY:ey}));
+              wrap.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true,button:0,clientX:ex,clientY:ey}));
               await wait(50);
-              const cells=document.querySelectorAll('#premium-multiview .premium-multiview-cell');
-              if(cells.length!==4) throw new Error('multiview_cells_'+cells.length);
-              window.imeDicomWorkstation.setMultiLayout(1);
-              const utilities=[...document.querySelectorAll('.appbar-tool')];
-              if(utilities.length<3) throw new Error('utility_controls_'+utilities.length);
-              finish('pass',{utilities:utilities.length,markers:markers.length,viewMenu:true,multiview:true,watermark:true});
+              if(!document.getElementById('v2-main-crop-layer')) throw new Error('crop_layer_missing');
+              if(canvas.style.visibility!=='hidden') throw new Error('crop_original_not_hidden');
+              document.getElementById('dv-wlww-reset').click(); await wait(20);
+              if(document.getElementById('v2-main-crop-layer')) throw new Error('crop_reset_failed');
+              if(canvas.style.visibility!=='visible') throw new Error('crop_original_not_restored');
+
+              finish('pass',{markers:4,viewMenu:2,layouts:4,resolution4k:true,crop:true,watermark:true,measureGrid:'3-2-2'});
             }catch(err){finish('fail',{error:err.message});}
           })();
           JS
@@ -118,14 +144,13 @@ jobs:
           CHROME: ${{ steps.browser.outputs.bin }}
         run: |
           "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
-            --virtual-time-budget=18000 --window-size=1600,1000 \
+            --virtual-time-budget=22000 --window-size=1600,1000 \
             --dump-dom --screenshot=main-workstation.png \
             http://127.0.0.1:8080/main-smoke.html > dom-main-smoke.html 2> chrome-main-smoke.log || true
           grep -q 'data-main-smoke="pass"' dom-main-smoke.html
-          grep -q '"markers":4' dom-main-smoke.html
-          grep -q '"viewMenu":true' dom-main-smoke.html
-          grep -q '"multiview":true' dom-main-smoke.html
-          grep -q '"watermark":true' dom-main-smoke.html
+          grep -q '"crop":true' dom-main-smoke.html
+          grep -q '"viewMenu":2' dom-main-smoke.html
+          grep -q '"resolution4k":true' dom-main-smoke.html
           if grep -q 'data-main-smoke="fail"' dom-main-smoke.html; then
             grep 'ime-main-smoke-result' dom-main-smoke.html >&2 || true
             exit 1
