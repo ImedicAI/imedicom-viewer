@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="viewer-premium.css">
 <link rel="stylesheet" href="workstation-restoration.css">
 <link rel="stylesheet" href="workstation-refinements-v2.css">
+<link rel="stylesheet" href="workstation-corrections-v3.css?v=20260814-1">
 </head>
 <body>
 <header class="appbar" id="ime-appbar">
@@ -44,41 +45,29 @@
     setTimeout(loadWorkstationAfterViewer,50);
     return;
   }
-  if(document.querySelector('script[data-workstation-restoration]')) return;
-  const restoration=document.createElement('script');
-  restoration.src='workstation-restoration.js';
-  restoration.dataset.workstationRestoration='true';
-  restoration.onload=()=>{
-    const utilities=document.createElement('script');
-    utilities.src='workstation-utilities.js';
-    utilities.dataset.workstationUtilities='true';
-    document.body.appendChild(utilities);
-  };
-  document.body.appendChild(restoration);
-})();
-
-(function loadRefinementsAfterViewer(){
-  if(!document.documentElement.dataset.viewerIntegration){
-    setTimeout(loadRefinementsAfterViewer,50);
-    return;
+  if(document.documentElement.dataset.workstationBundleLoading==='true') return;
+  document.documentElement.dataset.workstationBundleLoading='true';
+  function load(src,marker){
+    return new Promise((resolve,reject)=>{
+      if(marker&&document.querySelector('script['+marker+']')){resolve();return;}
+      const s=document.createElement('script');s.src=src;
+      if(marker){const pair=marker.split('=');s.setAttribute(pair[0],pair[1].replace(/^"|"$/g,''));}
+      s.onload=resolve;s.onerror=reject;document.body.appendChild(s);
+    });
   }
-  if(document.querySelector('script[data-workstation-refinements-v2]')) return;
-  const v2=document.createElement('script');
-  v2.src='workstation-refinements-v2.js';
-  v2.dataset.workstationRefinementsV2='true';
-  v2.onload=()=>{
-    const fix=document.createElement('script');
-    fix.src='workstation-refinements-v2-fix.js';
-    fix.dataset.workstationRefinementsV2Fix='true';
-    fix.onload=()=>{
-      const finalize=document.createElement('script');
-      finalize.src='workstation-refinements-v2-finalize.js';
-      finalize.dataset.workstationRefinementsV2Finalize='true';
-      document.body.appendChild(finalize);
-    };
-    document.body.appendChild(fix);
-  };
-  document.body.appendChild(v2);
+  (async()=>{
+    try{
+      await load('workstation-restoration.js','data-workstation-restoration="true"');
+      await load('workstation-utilities.js','data-workstation-utilities="true"');
+      await load('workstation-refinements-v2.js?v=20260814-1','data-workstation-v2="true"');
+      await load('workstation-refinements-v2-fix.js?v=20260814-1','data-workstation-v2-fix="true"');
+      await load('workstation-refinements-v2-finalize.js?v=20260814-1','data-workstation-v2-finalize="true"');
+      await load('workstation-corrections-v3.js?v=20260814-1','data-workstation-v3="true"');
+      document.documentElement.dataset.workstationBundle='v3-20260814';
+    }catch(err){
+      console.error('imeDICOM: no se pudo completar la capa de workstation',err);
+    }
+  })();
 })();
 </script>
 </body>
