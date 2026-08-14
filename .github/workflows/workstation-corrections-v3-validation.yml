@@ -1,0 +1,52 @@
+name: Workstation corrections v3 validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'workstation-corrections-v3.js'
+      - 'workstation-corrections-v3.css'
+      - '.github/workflows/workstation-corrections-v3-validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: JavaScript syntax
+        run: node --check workstation-corrections-v3.js
+      - name: Confirm deferred production load
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "dataset.viewerIntegration" index.html
+          grep -q "workstation-corrections-v3.js" index.html
+          grep -q "workstation-corrections-v3.css" index.html
+      - name: Confirm requested workstation corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "MARCADORES" workstation-corrections-v3.js
+          grep -q "HERRAMIENTAS" workstation-corrections-v3.js
+          grep -q "GIROS" workstation-corrections-v3.js
+          grep -q "DESHACER / REHACER" workstation-corrections-v3.js
+          grep -q "FORMATO / ORIENTACIÓN" workstation-corrections-v3.js
+          grep -q "Distribución" workstation-corrections-v3.js
+          grep -q "v3-layout-h2" workstation-corrections-v3.css
+          grep -q "v3-layout-h3" workstation-corrections-v3.css
+          grep -q "v3-layout-asym3" workstation-corrections-v3.css
+          grep -q "brightness(.94)" workstation-corrections-v3.css
+          grep -q "v3-study-count" workstation-corrections-v3.css
+          grep -q "dv-tool-crop" workstation-corrections-v3.js
+          grep -q "Cobb" workstation-corrections-v3.js
+      - name: Guard DICOM auto-orientation rule
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "CARESTREAM" viewer-load.js
+          grep -q "FOR PROCESSING" viewer-load.js
