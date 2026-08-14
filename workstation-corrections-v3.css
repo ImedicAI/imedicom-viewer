@@ -1,0 +1,101 @@
+/* imeDICOM workstation corrections — 2026-08-14 */
+:root{--v3-control-scale:.85;--v3-gap:8px;--v3-border:#244454;--v3-panel:#081822;--v3-panel-2:#0b1d27;--v3-text:#e9f4f8;--v3-muted:#6e9aae;}
+
+/* Section hierarchy requested for the right workstation rail. */
+#dv-quad-herramientas .v3-section{width:100%;margin:0 0 12px 0;}
+#dv-quad-herramientas .v3-section-title{display:block;margin:0 0 7px 0;color:var(--v3-muted);font-size:10px;line-height:1.1;letter-spacing:.13em;text-transform:uppercase;text-align:left;font-weight:500;}
+#dv-quad-herramientas .v3-section-body{width:85%;margin:0;}
+#dv-quad-herramientas .v3-marker-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;}
+#dv-quad-herramientas .v3-tools-stack{display:grid;gap:6px;}
+#dv-quad-herramientas .v3-tools-row-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;}
+#dv-quad-herramientas .v3-tools-row-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}
+#dv-quad-herramientas .v3-giro-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;}
+#dv-quad-herramientas .v3-history-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}
+
+/* Every icon-button frame in the right rail is about 15% smaller in both axes. */
+#dv-quad-herramientas .v3-section button,
+#dv-quad-herramientas .v3-view-row button,
+#dv-quad-herramientas .v3-format-control button{min-width:0!important;min-height:0!important;height:46px!important;padding:4px 6px!important;box-sizing:border-box;}
+#dv-quad-herramientas .v3-marker-grid button{height:35px!important;font-size:10px!important;}
+#dv-quad-herramientas .v3-giro-grid button{height:48px!important;}
+#dv-quad-herramientas .v3-history-grid button{height:39px!important;}
+#dv-quad-herramientas .v3-tools-row-3 button,#dv-quad-herramientas .v3-tools-row-2 button{height:47px!important;}
+#dv-quad-herramientas .v3-icon-svg{display:block;width:34px;height:34px;margin:auto;color:#f2f8fb;}
+#dv-quad-herramientas .v3-icon-svg svg{display:block;width:100%;height:100%;overflow:visible;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round;}
+#dv-quad-herramientas .v3-giro-grid .v3-icon-svg{width:38px;height:38px;}
+#dv-quad-herramientas .v3-crop-icon{width:36px;height:36px;}
+#dv-quad-herramientas .v3-cobb-icon{width:49px;height:38px;position:relative;}
+#dv-quad-herramientas .v3-cobb-word{position:absolute;left:7px;top:18px;font-size:7px;font-weight:800;letter-spacing:.01em;color:#fff;line-height:1;transform:rotate(-9deg);text-shadow:0 1px 2px #000;pointer-events:none;}
+#dv-quad-herramientas .v3-reset-word{font-size:14px;font-weight:800;letter-spacing:.03em;color:#fff;}
+
+/* Hide obsolete preset buttons and old empty headings/containers after DOM re-ordering. */
+#dv-quad-herramientas .v3-obsolete{display:none!important;}
+#dv-quad-herramientas #dv-preset-bone,#dv-quad-herramientas #dv-preset-soft{display:none!important;}
+
+/* Format / orientation above View + Distribution. */
+#dv-quad-herramientas .v3-format-block{width:100%;margin:2px 0 10px;}
+#dv-quad-herramientas .v3-format-control{display:grid;grid-template-columns:minmax(0,1fr) 32px;width:85%;position:relative;}
+#dv-quad-herramientas .v3-format-main{border-radius:6px 0 0 6px!important;border-right:0!important;height:47px!important;}
+#dv-quad-herramientas .v3-format-arrow{border-radius:0 6px 6px 0!important;border-left:1px solid #315362!important;height:47px!important;padding:0!important;display:grid;place-items:center;}
+#dv-quad-herramientas .v3-format-arrow::before{content:"";width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:6px solid #fff;}
+#dv-quad-herramientas .v3-format-main .v3-format-symbol{display:block;width:38px;height:34px;margin:auto;position:relative;}
+#dv-quad-herramientas .v3-format-main .v3-format-page{position:absolute;left:8px;top:7px;width:20px;height:23px;border:2px solid #eaf4f8;background:transparent;}
+#dv-quad-herramientas .v3-format-main .v3-format-page::after{content:"";position:absolute;left:4px;right:4px;top:10px;border-top:2px solid #eaf4f8;}
+#dv-quad-herramientas .v3-format-main .v3-format-turn{position:absolute;right:0;top:0;width:15px;height:15px;border-top:2px solid #7fb8d0;border-right:2px solid #7fb8d0;border-radius:0 7px 0 0;transform:rotate(24deg);}
+#dv-quad-herramientas .v3-format-main .v3-format-turn::after{content:"";position:absolute;right:-3px;top:7px;border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid #7fb8d0;transform:rotate(-35deg);}
+
+.v3-popup{position:fixed!important;z-index:100000!important;display:none!important;background:#07151e!important;border:1px solid #294a59!important;border-radius:7px!important;box-shadow:0 14px 34px rgba(0,0,0,.48)!important;padding:7px!important;box-sizing:border-box;}
+.v3-popup.v3-popup-open{display:grid!important;}
+#v3-format-menu{grid-template-columns:1fr!important;gap:6px!important;width:82px!important;}
+#v3-format-menu button{width:66px!important;height:42px!important;display:grid!important;place-items:center!important;padding:3px!important;}
+.v3-format-rect{display:block;border:2px solid #f2f8fb;border-radius:1px;}
+.v3-format-rect.horizontal{width:43px;height:23px;}
+.v3-format-rect.vertical{width:25px;height:36px;}
+
+/* View + distribution only; Óseo/Soft are intentionally absent. */
+#dv-quad-herramientas .v3-view-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;width:85%;margin:0 0 8px;}
+#dv-quad-herramientas .v3-view-row button{height:43px!important;}
+#premium-layout-opener[title="Distribución"]{position:relative;}
+
+/* Exact four requested distribution sketches. */
+#premium-layout-dropdown.v3-distribution-menu{grid-template-columns:repeat(2,62px)!important;grid-auto-rows:54px!important;gap:7px!important;padding:8px!important;width:auto!important;}
+#premium-layout-dropdown.v3-distribution-menu button{width:62px!important;height:54px!important;padding:6px!important;display:grid!important;place-items:center!important;}
+.v3-layout-icon{display:block;position:relative;width:44px;height:34px;border:2px solid #f2f8fb;border-radius:1px;box-sizing:border-box;}
+.v3-layout-icon i{position:absolute;display:block;background:#f2f8fb;}
+.v3-layout-icon.vsplit i{left:50%;top:0;bottom:0;width:2px;transform:translateX(-1px);}
+.v3-layout-icon.hsplit i{top:50%;left:0;right:0;height:2px;transform:translateY(-1px);}
+.v3-layout-icon.hthree i:nth-child(1){top:33.333%;left:0;right:0;height:2px;transform:translateY(-1px);}
+.v3-layout-icon.hthree i:nth-child(2){top:66.666%;left:0;right:0;height:2px;transform:translateY(-1px);}
+.v3-layout-icon.asym i:nth-child(1){left:50%;top:0;bottom:0;width:2px;transform:translateX(-1px);}
+.v3-layout-icon.asym i:nth-child(2){left:50%;right:0;top:50%;height:2px;transform:translateY(-1px);}
+
+/* Distribution must use the entire viewer surface. */
+#premium-multiview.v3-layout-v2,#premium-multiview.v3-layout-h2,#premium-multiview.v3-layout-h3,#premium-multiview.v3-layout-asym3{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;margin:0!important;padding:0!important;gap:2px!important;background:#000!important;box-sizing:border-box!important;overflow:hidden!important;align-items:stretch!important;justify-items:stretch!important;}
+#premium-multiview.v3-layout-v2{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;grid-template-rows:minmax(0,1fr)!important;}
+#premium-multiview.v3-layout-h2{display:grid!important;grid-template-columns:minmax(0,1fr)!important;grid-template-rows:repeat(2,minmax(0,1fr))!important;}
+#premium-multiview.v3-layout-h3{display:grid!important;grid-template-columns:minmax(0,1fr)!important;grid-template-rows:repeat(3,minmax(0,1fr))!important;}
+#premium-multiview.v3-layout-asym3{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;grid-template-rows:repeat(2,minmax(0,1fr))!important;}
+#premium-multiview.v3-layout-asym3 .premium-multiview-cell:nth-child(1){grid-column:1!important;grid-row:1 / span 2!important;}
+#premium-multiview.v3-layout-asym3 .premium-multiview-cell:nth-child(2){grid-column:2!important;grid-row:1!important;}
+#premium-multiview.v3-layout-asym3 .premium-multiview-cell:nth-child(3){grid-column:2!important;grid-row:2!important;}
+#premium-multiview.v3-layout-v2 .premium-multiview-cell,#premium-multiview.v3-layout-h2 .premium-multiview-cell,#premium-multiview.v3-layout-h3 .premium-multiview-cell,#premium-multiview.v3-layout-asym3 .premium-multiview-cell{width:100%!important;height:100%!important;min-width:0!important;min-height:0!important;margin:0!important;border-radius:0!important;overflow:hidden!important;position:relative!important;display:grid!important;place-items:center!important;background:#000!important;}
+#premium-multiview.v3-layout-v2 canvas,#premium-multiview.v3-layout-h2 canvas,#premium-multiview.v3-layout-h3 canvas,#premium-multiview.v3-layout-asym3 canvas{display:block!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;object-fit:contain!important;transform-origin:center center!important;}
+
+/* Drag target on the full viewer. */
+#dv-viewer-wrap.v3-drag-over{outline:2px dashed rgba(93,224,216,.9)!important;outline-offset:-5px!important;}
+
+/* Crop remains visually explicit: white dashed perimeter + 30% darker exterior. */
+.v2-crop-selection{border:2px dashed #fff!important;box-shadow:0 0 0 9999px rgba(0,0,0,.30)!important;background:transparent!important;}
+
+/* Watermark fills the viewer and is 30% brighter than the previous .72 brightness. */
+#dv-viewer-wrap .premium-empty-watermark.v2-full-watermark,#dv-viewer-wrap .premium-empty-watermark{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;object-fit:cover!important;object-position:center!important;opacity:.26!important;filter:grayscale(.15) saturate(.65) contrast(1.05) brightness(.94)!important;pointer-events:none!important;}
+
+/* Study count moved immediately above clear-list, never overlaid. */
+.v3-study-count{position:static!important;inset:auto!important;width:100%!important;min-height:24px!important;margin:7px 0 4px!important;padding:5px 8px!important;box-sizing:border-box!important;display:flex!important;align-items:center!important;white-space:normal!important;overflow:visible!important;z-index:auto!important;}
+.v3-clear-list-anchor{display:block!important;position:static!important;margin-top:2px!important;clear:both!important;}
+
+/* Local visual W/L analogue for snapshot comparison cells. */
+.premium-multiview-cell.v3-wlww-active{cursor:ew-resize!important;}
+.premium-multiview-cell.v3-right-zoom{cursor:ns-resize!important;}
+
+@media(max-width:1100px){#dv-quad-herramientas .v3-section-body,#dv-quad-herramientas .v3-view-row,#dv-quad-herramientas .v3-format-control{width:92%;}}
