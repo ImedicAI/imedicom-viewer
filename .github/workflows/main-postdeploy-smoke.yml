@@ -21,11 +21,13 @@ jobs:
           test -f workstation-restoration.css
           test -f workstation-restoration.js
           test -f workstation-utilities.js
+          test -f viewer-watermark.webp
           grep -q 'workstation-restoration.css' index.html
           grep -q 'workstation-restoration.js' index.html
           grep -q 'workstation-utilities.js' index.html
           grep -q 'viewer-loader.js' index.html
           ! grep -q 'viewer-source.html' viewer-loader.js
+          grep -q 'viewer-watermark.webp' workstation-restoration.js
           node --check viewer-ui.js
           node --check viewer-loader.js
           node --check workstation-restoration.js
@@ -67,18 +69,35 @@ jobs:
               if(!root) throw new Error('root_missing');
               root.classList.remove('dv-locked');
               if(lock) lock.classList.add('dv-hidden');
-              await wait(250);
-              for(const id of ['dv-viewer-wrap','dv-quad-herramientas','premium-study-status']){
+              if(window.imeDicomWorkstation?.ensureRestoration) window.imeDicomWorkstation.ensureRestoration();
+              await wait(300);
+              for(const id of ['dv-viewer-wrap','dv-quad-herramientas','premium-study-status','premium-layout-opener']){
                 if(!document.getElementById(id)) throw new Error('missing_'+id);
               }
-              for(const sel of ['.premium-bottom-dock','.premium-empty-overlay']){
-                if(!document.querySelector(sel)) throw new Error('missing_'+sel.slice(1));
+              if(document.querySelector('.premium-bottom-dock')) throw new Error('old_bottom_dock_present');
+              if(document.getElementById('dv-clear-annotations')) throw new Error('old_clear_button_present');
+              if(!document.querySelector('.premium-empty-overlay')) throw new Error('empty_overlay_missing');
+              const markers=[...document.querySelectorAll('#dv-quad-herramientas .premium-marker-row .dv-marker-btn')];
+              if(markers.length!==4) throw new Error('marker_count_'+markers.length);
+              const transformText=[...document.querySelectorAll('#premium-transform-grid .premium-refine-label')].map(n=>n.textContent.trim());
+              for(const expected of ['Giro Horizontal','Giro Vertical','90° izq.','90° der.']){
+                if(!transformText.includes(expected)) throw new Error('transform_missing_'+expected);
               }
-              const tools=[...document.querySelectorAll('#dv-quad-herramientas .premium-icon-button')];
-              if(tools.length<6) throw new Error('premium_icons_'+tools.length);
+              const view=document.getElementById('dv-view-opener');
+              view.click();
+              await wait(50);
+              const viewMenu=document.getElementById('dv-view-dropdown');
+              if(!viewMenu||!viewMenu.classList.contains('open')) throw new Error('view_menu_not_open');
+              if(viewMenu.querySelectorAll('.dv-btn').length<4) throw new Error('view_menu_options');
+              view.click();
+              window.imeDicomWorkstation.setMultiLayout(4);
+              await wait(50);
+              const cells=document.querySelectorAll('#premium-multiview .premium-multiview-cell');
+              if(cells.length!==4) throw new Error('multiview_cells_'+cells.length);
+              window.imeDicomWorkstation.setMultiLayout(1);
               const utilities=[...document.querySelectorAll('.appbar-tool')];
               if(utilities.length<3) throw new Error('utility_controls_'+utilities.length);
-              finish('pass',{premiumIcons:tools.length,utilities:utilities.length,dock:true,emptyOverlay:true});
+              finish('pass',{utilities:utilities.length,markers:markers.length,viewMenu:true,multiview:true,watermark:true});
             }catch(err){finish('fail',{error:err.message});}
           })();
           JS
@@ -99,12 +118,14 @@ jobs:
           CHROME: ${{ steps.browser.outputs.bin }}
         run: |
           "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
-            --virtual-time-budget=16000 --window-size=1600,1000 \
+            --virtual-time-budget=18000 --window-size=1600,1000 \
             --dump-dom --screenshot=main-workstation.png \
             http://127.0.0.1:8080/main-smoke.html > dom-main-smoke.html 2> chrome-main-smoke.log || true
           grep -q 'data-main-smoke="pass"' dom-main-smoke.html
-          grep -q '"utilities":3' dom-main-smoke.html
-          grep -q '"dock":true' dom-main-smoke.html
+          grep -q '"markers":4' dom-main-smoke.html
+          grep -q '"viewMenu":true' dom-main-smoke.html
+          grep -q '"multiview":true' dom-main-smoke.html
+          grep -q '"watermark":true' dom-main-smoke.html
           if grep -q 'data-main-smoke="fail"' dom-main-smoke.html; then
             grep 'ime-main-smoke-result' dom-main-smoke.html >&2 || true
             exit 1
