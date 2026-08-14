@@ -37,7 +37,24 @@
 <script src="viewer-viewport.js"></script>
 <script src="viewer-annotation-interaction.js"></script>
 <script src="viewer-loader.js"></script>
-<script src="workstation-restoration.js"></script>
-<script src="workstation-utilities.js"></script>
+<script>
+(function loadWorkstationAfterViewer(){
+  if(!document.documentElement.dataset.viewerIntegration){
+    setTimeout(loadWorkstationAfterViewer,50);
+    return;
+  }
+  if(document.querySelector('script[data-workstation-restoration]')) return;
+  const restoration=document.createElement('script');
+  restoration.src='workstation-restoration.js';
+  restoration.dataset.workstationRestoration='true';
+  restoration.onload=()=>{
+    const utilities=document.createElement('script');
+    utilities.src='workstation-utilities.js';
+    utilities.dataset.workstationUtilities='true';
+    document.body.appendChild(utilities);
+  };
+  document.body.appendChild(restoration);
+})();
+</script>
 </body>
 </html>
