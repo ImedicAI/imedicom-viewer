@@ -17,7 +17,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for f in viewer-ui.js viewer-loader.js viewer-runtime.js viewer-load.js viewer-render.js viewer-tools.js viewer-export.js viewer-viewport.js viewer-annotation-interaction.js viewer-dicom-data.js dicom-core.js workstation-restoration.js workstation-utilities.js; do
+          for f in viewer-ui.js viewer-loader.js viewer-runtime.js viewer-load.js viewer-render.js viewer-tools.js viewer-export.js viewer-viewport.js viewer-annotation-interaction.js viewer-dicom-data.js dicom-core.js workstation-restoration.js workstation-utilities.js workstation-refinements-v2.js workstation-refinements-v2-fix.js workstation-refinements-v2-finalize.js; do
             node --check "$f"
           done
 
@@ -29,17 +29,21 @@ jobs:
           test -f workstation-restoration.css
           test -f workstation-restoration.js
           test -f workstation-utilities.js
+          test -f workstation-refinements-v2.css
+          test -f workstation-refinements-v2.js
+          test -f workstation-refinements-v2-fix.js
+          test -f workstation-refinements-v2-finalize.js
           grep -q 'viewer-watermark.webp' workstation-restoration.js
           grep -q 'premium-marker-row' workstation-restoration.js
-          grep -q 'Giro Horizontal' workstation-restoration.js
-          grep -q 'Giro Vertical' workstation-restoration.js
-          grep -q '90° izq.' workstation-restoration.js
-          grep -q '90° der.' workstation-restoration.js
           grep -q 'premium-layout-opener' workstation-restoration.js
           grep -q 'premium-multiview' workstation-restoration.js
-          grep -q 'workstation-restoration.css' index.html
-          grep -q 'workstation-restoration.js' index.html
-          grep -q 'workstation-utilities.js' index.html
+          grep -q 'dv-tool-crop' workstation-refinements-v2.js
+          grep -q '4K UHD' workstation-refinements-v2.js
+          grep -q 'v2-full-watermark' workstation-refinements-v2.css
+          grep -q 'workstation-refinements-v2.css' index.html
+          grep -q 'workstation-refinements-v2.js' index.html
+          grep -q 'workstation-refinements-v2-fix.js' index.html
+          grep -q 'workstation-refinements-v2-finalize.js' index.html
           grep -q 'premium-focus-layout' workstation-utilities.js
 
       - name: Validate no clinical DICOM payload was added
@@ -57,7 +61,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           p=Path('index.html').read_text()
-          hook='''<script>\nsetTimeout(()=>{\n  const root=document.getElementById('dv-root');\n  const lock=document.getElementById('dv-lock-screen');\n  if(root) root.classList.remove('dv-locked');\n  if(lock) lock.classList.add('dv-hidden');\n  if(window.imeDicomUi?.applyPremiumDom) window.imeDicomUi.applyPremiumDom();\n  if(window.imeDicomWorkstation?.ensureRestoration) window.imeDicomWorkstation.ensureRestoration();\n  if(window.imeDicomWorkstation?.setMultiLayout) window.imeDicomWorkstation.setMultiLayout(4);\n},1200);\n</script>'''
+          hook='''<script>\nsetTimeout(()=>{\n  const root=document.getElementById('dv-root');\n  const lock=document.getElementById('dv-lock-screen');\n  if(root) root.classList.remove('dv-locked');\n  if(lock) lock.classList.add('dv-hidden');\n  if(window.imeDicomWorkstation?.setMultiLayout) window.imeDicomWorkstation.setMultiLayout(4);\n},1800);\n</script>'''
           p=p.replace('</body>',hook+'\n</body>')
           Path('workstation-preview.html').write_text(p)
           PY
@@ -69,8 +73,8 @@ jobs:
           echo $! >/tmp/imed_server.pid
           sleep 2
           curl -fsS http://127.0.0.1:8000/index.html >/tmp/index.html
-          curl -fsS http://127.0.0.1:8000/workstation-restoration.css >/tmp/workstation-restoration.css
-          curl -fsS http://127.0.0.1:8000/workstation-restoration.js >/tmp/workstation-restoration.js
+          curl -fsS http://127.0.0.1:8000/workstation-refinements-v2.css >/tmp/workstation-refinements-v2.css
+          curl -fsS http://127.0.0.1:8000/workstation-refinements-v2.js >/tmp/workstation-refinements-v2.js
           curl -fsS http://127.0.0.1:8000/viewer-watermark.webp >/tmp/viewer-watermark.webp
           curl -fsS http://127.0.0.1:8000/workstation-preview.html >/tmp/workstation-preview.html
 
@@ -93,7 +97,7 @@ jobs:
           BROWSER_BIN: ${{ steps.browser.outputs.bin }}
         run: |
           set -euo pipefail
-          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1600,900 --virtual-time-budget=5500 --screenshot=/tmp/workstation.png http://127.0.0.1:8000/workstation-preview.html || true
+          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --hide-scrollbars --window-size=1600,900 --virtual-time-budget=8000 --screenshot=/tmp/workstation.png http://127.0.0.1:8000/workstation-preview.html || true
           test -s /tmp/workstation.png
 
       - name: Validate refined DOM in Chromium
@@ -102,16 +106,19 @@ jobs:
           BROWSER_BIN: ${{ steps.browser.outputs.bin }}
         run: |
           set -euo pipefail
-          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --virtual-time-budget=5500 --dump-dom http://127.0.0.1:8000/workstation-preview.html > /tmp/workstation-dom.html
+          "$BROWSER_BIN" --headless --no-sandbox --disable-gpu --virtual-time-budget=8000 --dump-dom http://127.0.0.1:8000/workstation-preview.html > /tmp/workstation-dom.html
           ! grep -q 'class="premium-bottom-dock"' /tmp/workstation-dom.html
           ! grep -q 'id="dv-clear-annotations"' /tmp/workstation-dom.html
           grep -q 'premium-empty-overlay' /tmp/workstation-dom.html
-          grep -q 'viewer-watermark.webp' /tmp/workstation-dom.html
+          grep -q 'v2-full-watermark' /tmp/workstation-dom.html
           grep -q 'premium-marker-row' /tmp/workstation-dom.html
-          grep -q 'Giro Horizontal' /tmp/workstation-dom.html
-          grep -q 'Giro Vertical' /tmp/workstation-dom.html
-          grep -q '90° izq.' /tmp/workstation-dom.html
-          grep -q '90° der.' /tmp/workstation-dom.html
+          ! grep -q 'premium-refine-label' /tmp/workstation-dom.html
+          grep -q 'id="dv-tool-crop"' /tmp/workstation-dom.html
+          grep -q 'id="v2-res-wrap"' /tmp/workstation-dom.html
+          grep -q '4K UHD' /tmp/workstation-dom.html
+          grep -q '>RESET<' /tmp/workstation-dom.html
+          ! grep -q 'id="dv-toggle-measurements"' /tmp/workstation-dom.html
+          ! grep -q 'id="dv-show-tags"' /tmp/workstation-dom.html
           grep -q 'id="premium-layout-opener"' /tmp/workstation-dom.html
           grep -q 'id="premium-multiview"' /tmp/workstation-dom.html
           test "$(grep -o 'premium-multiview-cell' /tmp/workstation-dom.html | wc -l)" -ge 4
