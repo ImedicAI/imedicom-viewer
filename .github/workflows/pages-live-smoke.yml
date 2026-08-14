@@ -8,6 +8,7 @@ on:
       - 'viewer-*.js'
       - 'viewer-*.html'
       - 'viewer-*.css'
+      - 'viewer-watermark.webp'
       - 'workstation-*.js'
       - 'workstation-*.css'
       - 'dicom-core.js'
@@ -43,7 +44,7 @@ jobs:
             html=$(curl -fsSL --max-time 20 "$BASE/?smoke=${GITHUB_RUN_ID}-${i}" || true)
             if printf '%s' "$html" | grep -q 'workstation-restoration.js' \
                && printf '%s' "$html" | grep -q 'workstation-utilities.js' \
-               && curl -fsSL --max-time 20 "$BASE/assets/chest-watermark.svg?smoke=${GITHUB_RUN_ID}-${i}" >/dev/null \
+               && curl -fsSL --max-time 20 "$BASE/viewer-watermark.webp?smoke=${GITHUB_RUN_ID}-${i}" >/dev/null \
                && curl -fsSL --max-time 20 "$BASE/viewer-loader.js?smoke=${GITHUB_RUN_ID}-${i}" >/dev/null; then
               printf '%s' "$html" > live-index.html
               exit 0
@@ -67,6 +68,11 @@ jobs:
           grep -q 'id="dv-root"' pages-live-dom.html
           grep -q 'id="dv-canvas"' pages-live-dom.html
           grep -q 'data-viewer-integration=' pages-live-dom.html
+          grep -q 'id="premium-layout-opener"' pages-live-dom.html
+          grep -q 'premium-marker-row' pages-live-dom.html
+          grep -q 'Giro Horizontal' pages-live-dom.html
+          grep -q 'Giro Vertical' pages-live-dom.html
+          grep -q 'viewer-watermark.webp' pages-live-dom.html
           grep -q 'workstation-restoration.js' live-index.html
           grep -q 'workstation-utilities.js' live-index.html
           if grep -q 'No se pudo inicializar el visor' pages-live-dom.html; then
