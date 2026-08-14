@@ -1,5 +1,5 @@
 (function(){
-  let pending=false;
+  let pending=false,observer=null;
   function enforce(){
     pending=false;
     const reset=document.getElementById('dv-wlww-reset');
@@ -11,11 +11,13 @@
     ['dv-toggle-measurements','dv-show-tags'].forEach(id=>document.getElementById(id)?.remove());
   }
   function schedule(){if(pending)return;pending=true;requestAnimationFrame(enforce);}
-  function init(){
+  function bind(){
+    const root=document.getElementById('dv-root'),reset=document.getElementById('dv-wlww-reset');
+    if(!root||!reset)return false;
     enforce();
-    const root=document.getElementById('dv-root');
-    if(root)new MutationObserver(schedule).observe(root,{childList:true,subtree:true});
-    setTimeout(enforce,300);setTimeout(enforce,1000);
+    if(!observer){observer=new MutationObserver(schedule);observer.observe(root,{childList:true,subtree:true});}
+    return true;
   }
-  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>setTimeout(init,160));else setTimeout(init,160);
+  let tries=0;const timer=setInterval(()=>{tries++;if(bind()||tries>160)clearInterval(timer);},50);
+  setTimeout(enforce,600);setTimeout(enforce,1600);
 })();
