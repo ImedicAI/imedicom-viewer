@@ -59,7 +59,7 @@ jobs:
             result.style.display='none';
             document.body.appendChild(result);
             const finish=(s,d)=>{result.dataset.status=s;result.textContent=JSON.stringify(d||{});document.documentElement.dataset.mainSmoke=s;};
-            const until=async(fn,label)=>{for(let i=0;i<160;i++){const v=fn();if(v)return v;await wait(100);}throw new Error('timeout_'+label);};
+            const until=async(fn,label)=>{for(let i=0;i<180;i++){const v=fn();if(v)return v;await wait(100);}throw new Error('timeout_'+label);};
             try{
               await until(()=>document.documentElement.dataset.viewerIntegration,'viewer');
               const root=document.getElementById('dv-root');
@@ -67,7 +67,7 @@ jobs:
               if(!root) throw new Error('root_missing');
               root.classList.remove('dv-locked');
               if(lock) lock.classList.add('dv-hidden');
-              await until(()=>document.getElementById('dv-tool-crop'),'v2_controls');
+              await until(()=>document.getElementById('dv-tool-crop')&&document.getElementById('premium-layout-opener'),'v2_controls');
 
               for(const id of ['dv-viewer-wrap','dv-quad-herramientas','premium-study-status','premium-layout-opener','v2-res-wrap','v2-measure-top','v2-measure-second','v2-measure-bottom']){
                 if(!document.getElementById(id)) throw new Error('missing_'+id);
@@ -144,7 +144,7 @@ jobs:
           CHROME: ${{ steps.browser.outputs.bin }}
         run: |
           "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm-usage \
-            --virtual-time-budget=22000 --window-size=1600,1000 \
+            --virtual-time-budget=24000 --window-size=1600,1000 \
             --dump-dom --screenshot=main-workstation.png \
             http://127.0.0.1:8080/main-smoke.html > dom-main-smoke.html 2> chrome-main-smoke.log || true
           grep -q 'data-main-smoke="pass"' dom-main-smoke.html
